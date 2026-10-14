@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -12,6 +13,27 @@ from websockets.asyncio.server import ServerConnection
 from .tools import 打印
 
 logger = logging.getLogger(__name__)
+
+# 只在回环上绑定时才算「本机」。
+_回环主机名 = {"localhost"}
+
+
+def _是回环地址(地址: str) -> bool:
+    """地址是否只在本机可达。
+
+    绑非回环地址却不设访问令牌，等于把「伪造 QQ 事件的入口」敞开：任何能访问
+    该端口的人都可以冒充任意用户/群（直接绕过用户白名单）、伪造 API 响应，或
+    借事件里的路径字段让 bot 去读本机文件。
+    """
+    值 = str(地址 or "").strip().strip("[]").lower()
+    if not 值:
+        return False
+    if 值 in _回环主机名:
+        return True
+    try:
+        return ipaddress.ip_address(值).is_loopback
+    except ValueError:
+        return False
 
 
 class WS:
@@ -43,6 +65,14 @@ class WS:
 
     async def 启动(self) -> None:
         """启动反向 WS 服务端（使用 __init__ 中保存的配置）。"""
+        # 失败即拒：非回环地址 + 无令牌 = 谁都能伪造事件。宁可启动不了，也不要
+        # 一个看起来正常、实际对全网敞开的入口。
+        if not _是回环地址(self._监听地址) and not self._访问令牌:
+            raise ValueError(
+                f"拒绝启动：监听地址「{self._监听地址}」不是回环地址，却没有设置访问令牌。"
+                "请把 reverse_host 改回 127.0.0.1，或同时设置 access_token。"
+            )
+
         async def _处理连接(ws连接: ServerConnection):
             await self._认证并处理连接(ws连接) # type: ignore[attr-defined]
 
@@ -70,8 +100,13 @@ class WS:
     # ── 内部方法 ──────────────────────────────────────────────────────────
 
     async def _认证并处理连接(self, ws连接) -> None:
-        """认证 NapCat 连接，然后进入消息接收循环。"""
-        self._ws连接实例 = ws连接
+        """认证 NapCat 连接，认证通过后才接管发送通道，然后进入消息接收循环。
+
+        ⚠️ 顺序很要紧：认证通过之前绝不能把 `self._ws连接实例` 指过去。原实现
+        「先接管、再认证」，认证失败只 close + return —— 而那条路径**不会走
+        finally**，于是 `_ws连接实例` 永久停在已关闭的 socket 上，出站消息全部
+        失败。任何人对端口发一次坏令牌的连接即可触发（连令牌都不需要知道）。
+        """
         if self._访问令牌:
             认证头 = ws连接.request.headers.get("Authorization", "")
             提取的令牌 = 认证头.removeprefix("Bearer ").strip()
@@ -84,8 +119,22 @@ class WS:
                     提取的令牌 = ""
 
             if not hmac.compare_digest(提取的令牌, self._访问令牌):
+                logger.warning(f"反向WS认证失败，拒绝连接：{ws连接.remote_address}")
+                打印(f"反向WS认证失败，拒绝连接：{ws连接.remote_address}")
                 await ws连接.close(1008, "认证失败")
                 return
+
+        # 认证通过才接管。已有连接时先关掉旧的，避免两条连接同时收事件、
+        # 而发送只走新连接，造成串台。
+        旧连接 = self._ws连接实例
+        if 旧连接 is not None and 旧连接 is not ws连接:
+            logger.info("反向WS：新客户端接入，顶替旧连接")
+            打印("反向WS：新客户端接入，顶替旧连接")
+            try:
+                await 旧连接.close(1008, "连接已被新客户端顶替")
+            except Exception:
+                pass
+        self._ws连接实例 = ws连接
 
         logger.info(f"反向WS客户端已连接：{ws连接.remote_address}")
         打印(f"反向WS客户端已连接：{ws连接.remote_address}")
@@ -100,12 +149,16 @@ class WS:
             logger.error(f"反向WS处理错误: {e}", exc_info=True)
             打印(f"反向WS处理错误: {e}")
         finally:
-            logger.info("反向WS客户端已断开")
-            打印("反向WS客户端已断开")
-            for 正在等待 in self._待响应映射表.values():
-                if not 正在等待.done():
-                    正在等待.set_exception(ConnectionError("WebSocket 已断开"))
-            self._待响应映射表.clear()
+            # 只有「自己仍是当前连接」才清理共享状态：被顶替的旧连接收尾时若清空
+            # 待响应表，会把新连接正在等待的 API 响应一起打掉。
+            if self._ws连接实例 is ws连接:
+                self._ws连接实例 = None
+                logger.info("反向WS客户端已断开")
+                打印("反向WS客户端已断开")
+                for 正在等待 in self._待响应映射表.values():
+                    if not 正在等待.done():
+                        正在等待.set_exception(ConnectionError("WebSocket 已断开"))
+                self._待响应映射表.clear()
 
     async def _处理消息(self, 原始消息: str) -> None:
         """解析并分发 WebSocket 消息。"""

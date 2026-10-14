@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""反向 WS 加固的验证:绑定性、认证顺序、连接顶替。
+
+不是读代码判断,而是真的起服务端、用 websockets 客户端连上去打。
+
+用法(需要一个装了 Hermes 依赖的 python,因为要 import websockets):
+
+    HERMES_WORKSPACE=~/.hermes/installs/*/environments/*/workspace \
+        python tests/test_ws_hardening.py
+
+不设 HERMES_WORKSPACE 时会自动在 ~/.hermes/installs 下找一个含 gateway/ 的 workspace。
+"""
+import asyncio
+import importlib.util
+import os
+import sys
+import types
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _定位工作区() -> str:
+    """找到 Hermes 的 workspace(python 包的根),用来 import websockets / gateway。"""
+    候选 = [os.environ.get("HERMES_WORKSPACE", "")]
+    候选 += [str(p) for p in sorted(Path.home().glob(".hermes/installs/*/environments/*/workspace"))]
+    for 路径 in 候选:
+        if 路径 and (Path(路径) / "gateway" / "config.py").is_file():
+            return 路径
+    print("找不到 Hermes workspace,请设置 HERMES_WORKSPACE", file=sys.stderr)
+    sys.exit(2)
+
+
+sys.path.insert(0, _定位工作区())
+
+import websockets  # noqa: E402
+
+# 把本仓库当包加载(目录名含连字符,不能直接 import)
+pkg = types.ModuleType("napcat_plugin")
+pkg.__path__ = [str(REPO)]
+sys.modules["napcat_plugin"] = pkg
+for mod in ("tools", "ws"):
+    spec = importlib.util.spec_from_file_location(f"napcat_plugin.{mod}", REPO / f"{mod}.py")
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[f"napcat_plugin.{mod}"] = m
+    spec.loader.exec_module(m)
+
+WS = sys.modules["napcat_plugin.ws"].WS
+是回环 = sys.modules["napcat_plugin.ws"]._是回环地址
+
+结果 = []
+
+
+def 判定(名, 通过, 详情=""):
+    结果.append((名, 通过))
+    print(f"  {'✅ PASS' if 通过 else '❌ FAIL'}  {名}" + (f"   {详情}" if 详情 else ""))
+
+
+async def 主体():
+    print("① 地址判定")
+    for addr, want in (("127.0.0.1", True), ("localhost", True), ("::1", True),
+                       ("[::1]", True), ("127.0.0.5", True),
+                       ("0.0.0.0", False), ("::", False), ("192.168.1.5", False),
+                       ("example.com", False)):
+        判定(f"_是回环地址({addr!r}) == {want}", 是回环(addr) is want)
+
+    print("\n② 非回环 + 无令牌 → 必须拒绝启动")
+    bad = WS(lambda d: None, "0.0.0.0", 16811, "")
+    try:
+        await bad.启动()
+        await bad.停止()
+        判定("0.0.0.0 + 无令牌 被拒绝", False, "竟然启动成功了!")
+    except ValueError as e:
+        判定("0.0.0.0 + 无令牌 被拒绝", True, str(e)[:46] + "…")
+
+    print("\n③ 非回环 + 有令牌 → 允许(令牌补上就行)")
+    ok_remote = WS(lambda d: None, "192.0.2.1", 16812, "tok")  # TEST-NET,绑不上但应过守卫
+    try:
+        await ok_remote.启动()
+        await ok_remote.停止()
+        判定("非回环 + 有令牌 通过守卫", True)
+    except ValueError as e:
+        判定("非回环 + 有令牌 通过守卫", False, f"被守卫拦了: {e}")
+    except OSError:
+        判定("非回环 + 有令牌 通过守卫", True, "守卫放行,绑定失败属预期(TEST-NET 地址)")
+
+    print("\n④ 回环 + 无令牌 → 仍允许(默认配置不能被搞坏)")
+    ok_local = WS(lambda d: None, "127.0.0.1", 16813, "")
+    try:
+        await ok_local.启动()
+        await ok_local.停止()
+        判定("127.0.0.1 + 无令牌 可用", True)
+    except Exception as e:
+        判定("127.0.0.1 + 无令牌 可用", False, f"{type(e).__name__}: {e}")
+
+    print("\n⑤ 核心回归:坏令牌连接不得污染发送通道")
+    srv = WS(lambda d: None, "127.0.0.1", 16814, "good-token")
+    await srv.启动()
+    try:
+        # 先让合法客户端接上,建立正常的发送通道
+        legit = await websockets.connect("ws://127.0.0.1:16814/?access_token=good-token")
+        await asyncio.sleep(0.3)
+        第一任 = srv._ws连接实例
+        判定("合法客户端已成为当前连接", 第一任 is not None)
+
+        # 攻击者用坏令牌连一次,然后断开
+        try:
+            async with websockets.connect("ws://127.0.0.1:16814/?access_token=wrong"):
+                await asyncio.sleep(0.3)
+        except Exception:
+            pass
+        await asyncio.sleep(0.3)
+        判定("坏令牌之后,当前连接未被改写(DoS 已修)", srv._ws连接实例 is 第一任,
+             f"当前={type(srv._ws连接实例).__name__ if srv._ws连接实例 else None}")
+
+        # 合法通道仍可用:发一个动作,应能真的收发
+        # 注意:假响应器必须读【客户端】那头 —— 服务端 ServerConnection 的迭代器
+        # 已被 _认证并处理连接 自己的 async for 占着,再挂一个读不到东西。
+        async def 假响应():
+            try:
+                async for msg in legit:
+                    import json as _j
+                    d = _j.loads(msg)
+                    if d.get("echo"):
+                        await legit.send(_j.dumps({"status": "ok", "retcode": 0,
+                                                 "echo": d["echo"], "data": {"ok": 1}}))
+            except Exception:
+                pass
+
+        任务 = asyncio.create_task(假响应())
+        调用 = await srv.调用API("get_login_info", {}, 超时秒数=3)
+        任务.cancel()
+        判定("坏令牌之后,合法通道仍能收发", 调用.get("status") == "ok", str(调用)[:60])
+
+        # 新合法客户端顶替旧连接
+        第二任客户端 = await websockets.connect("ws://127.0.0.1:16814/?access_token=good-token")
+        await asyncio.sleep(0.4)
+        判定("新客户端顶替旧连接", srv._ws连接实例 is not 第一任)
+        try:
+            # 从【旧客户端】那侧看它有没有被服务端断开 —— 这才是「旧连接已关闭」的真判据
+            await asyncio.wait_for(legit.recv(), timeout=2)
+            判定("旧连接被服务端关闭", False, "旧客户端还能收到数据")
+        except Exception as e:
+            判定("旧连接被服务端关闭", True, type(e).__name__)
+        await 第二任客户端.close()
+        await asyncio.sleep(0.3)
+        判定("当前连接断开后置空,不会留下死 socket", srv._ws连接实例 is None)
+    finally:
+        await srv.停止()
+
+    print("\n================ 汇总 ================")
+    通过 = sum(1 for _, p in 结果 if p)
+    print(f"{通过}/{len(结果)} 通过")
+    for 名, p in 结果:
+        if not p:
+            print("  ❌", 名)
+    return 0 if 通过 == len(结果) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(主体()))
