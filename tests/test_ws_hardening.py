@@ -11,39 +11,15 @@
 不设 HERMES_WORKSPACE 时会自动在 ~/.hermes/installs 下找一个含 gateway/ 的 workspace。
 """
 import asyncio
-import importlib.util
-import os
 import sys
-import types
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import 加载包  # noqa: E402
 
-
-def _定位工作区() -> str:
-    """找到 Hermes 的 workspace(python 包的根),用来 import websockets / gateway。"""
-    候选 = [os.environ.get("HERMES_WORKSPACE", "")]
-    候选 += [str(p) for p in sorted(Path.home().glob(".hermes/installs/*/environments/*/workspace"))]
-    for 路径 in 候选:
-        if 路径 and (Path(路径) / "gateway" / "config.py").is_file():
-            return 路径
-    print("找不到 Hermes workspace,请设置 HERMES_WORKSPACE", file=sys.stderr)
-    sys.exit(2)
-
-
-sys.path.insert(0, _定位工作区())
+加载包("tools", "ws")
 
 import websockets  # noqa: E402
-
-# 把本仓库当包加载(目录名含连字符,不能直接 import)
-pkg = types.ModuleType("napcat_plugin")
-pkg.__path__ = [str(REPO)]
-sys.modules["napcat_plugin"] = pkg
-for mod in ("tools", "ws"):
-    spec = importlib.util.spec_from_file_location(f"napcat_plugin.{mod}", REPO / f"{mod}.py")
-    m = importlib.util.module_from_spec(spec)
-    sys.modules[f"napcat_plugin.{mod}"] = m
-    spec.loader.exec_module(m)
 
 WS = sys.modules["napcat_plugin.ws"].WS
 是回环 = sys.modules["napcat_plugin.ws"]._是回环地址

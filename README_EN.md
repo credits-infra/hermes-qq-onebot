@@ -272,8 +272,52 @@ NAPCAT_ALLOWED_USERS=123456,789012
 
 # Allow all users (set to true to skip whitelist)
 NAPCAT_ALLOW_ALL_USERS=false
+
+# Group allowlist (default empty = no group is served; `all` disables the check)
+NAPCAT_ALLOWED_GROUPS=123456,789012
+NAPCAT_ALLOWED_GROUPS='[123, 456]'        # JSON array also accepted
+
+# Do slash commands in groups also require an @mention/keyword? (default true)
+NAPCAT_GROUP_COMMAND_REQUIRES_MENTION=true
+
+# Outbound security: extra OneBot actions / CQ types (added on top of the defaults)
+NAPCAT_ALLOWED_ACTIONS='["upload_group_file"]'    # default: read-only actions only
+NAPCAT_ALLOWED_CQ_TYPES=shake                     # face/at/image/record/video/reply by default
+NAPCAT_ALLOW_AT_ALL=false                         # allow @everyone
 ```
 </details>
+
+---
+
+## 🛡️ Outbound Security Policy
+
+This plugin lets the LLM call OneBot APIs and write CQ codes in replies — **both can exfiltrate files from
+the host**. That is fine for a bot in your own group, not fine for a bot in someone else's. Three gates ship
+on by default:
+
+**1. API action allowlist (`napcat_call_action`)** — only read-only queries are allowed by default
+(`get_group_list`, `get_group_info`, `get_msg`, `get_group_msg_history`, …). Actions like
+`upload_group_file` (send an arbitrary host file into a group), `download_file` (write an arbitrary URL to an
+arbitrary path), `delete_msg`, `set_group_*` and `send_*` are refused unless the operator names them in
+`allowed_actions` (or `all`). Credential-revealing actions (`get_cookies`, `get_csrf_token`) are refused even
+under `all`. Naming actions **extends** the default read-only set — enabling one action never locks out queries.
+
+**2. CQ code sanitization** — `[CQ:file,file=file:///any/path]` is the same exfiltration route as
+`upload_group_file`, so it is never allowed; `[CQ:image]`/`[CQ:record]`/`[CQ:video]` with a **local** path must
+pass Hermes' own media allowlist (`gateway.media_delivery_allow_dirs`) so that "which files may leave" has a
+single source of truth; `[CQ:at,qq=all]` requires `allow_at_all: true`; unknown CQ types are dropped
+(default-deny). Sanitization covers every egress of **model-generated** text: normal messages, ```` ```CQ ````
+blocks, long-message splitting and image captions. Attachments sent through the `MEDIA:` route are unaffected —
+Hermes validates those first.
+
+**3. Admission control (default deny)** — `allowed_qq_ids` (empty = nobody) and `allowed_group_ids`
+(empty = no group, a **behavior change**: configure it or the bot ignores all group messages).
+`group_command_requires_mention` (default `true`) also requires an @mention for `/commands` in groups.
+`napcat_send_message` additionally validates that the target is inside the allowlists.
+
+**Transport** — binding the reverse WebSocket to a non-loopback address **requires** `access_token`;
+otherwise the plugin refuses to start, because anyone reaching that port could forge QQ events (impersonating
+any user/group and bypassing the user allowlist) or forge API responses.
 
 ---
 

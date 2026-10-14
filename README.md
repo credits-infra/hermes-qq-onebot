@@ -287,8 +287,72 @@ NAPCAT_ALLOWED_USERS=123456,789012
 
 # 允许所有用户（设置为 true 时跳过白名单）
 NAPCAT_ALLOW_ALL_USERS=false
+
+# 群白名单（默认空 = 一个群都不收；写 all 表示不限制群）
+NAPCAT_ALLOWED_GROUPS=123456,789012
+NAPCAT_ALLOWED_GROUPS='[123, 456]'        # JSON 数组也行
+
+# 群里的斜杠指令是否也要求 @机器人/关键词（默认 true）
+NAPCAT_GROUP_COMMAND_REQUIRES_MENTION=true
+
+# 出站安全：额外放行的 OneBot 动作 / CQ 码类型（追加在默认白名单之上）
+NAPCAT_ALLOWED_ACTIONS='["upload_group_file"]'    # 默认只放行只读查询动作
+NAPCAT_ALLOWED_CQ_TYPES=shake                     # 默认已有 face/at/image/record/video/reply
+NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 ```
 </details>
+
+---
+
+## 🛡️ 出站安全策略
+
+这个插件能让 LLM 直接调 OneBot API，也能在回复里写 CQ 码 —— 两条路都能把**服务器上的文件发出去**。
+把它放进自己的小号群无所谓，放进别人的群就必须有闸门。以下是内置的三道（默认全开，不需要额外配置）：
+
+### 1. API 动作白名单（`napcat_call_action`）
+
+默认只放行**只读查询**动作（`get_group_list` / `get_group_info` / `get_msg` / `get_group_msg_history` 等）。
+
+`upload_group_file`（按路径把服务器文件发进群）、`download_file`（按给定 URL 写到给定路径）、
+`delete_msg`、`set_group_*`、`send_*` 等一律拒绝，需要运维在 `allowed_actions` 里点名（或写 `all`）。
+`get_cookies` / `get_csrf_token` 这类**交出账号凭据**的动作写 `all` 也不放行。
+
+点名是**追加**在默认白名单之上 —— 放开一个动作不会把只读查询一起锁死。
+
+### 2. CQ 码净化
+
+`[CQ:file,file=file:///任意路径]` 与 `upload_group_file` 是同一条外泄路，所以：
+
+- `[CQ:file]` 永不放过；
+- `[CQ:image]` / `[CQ:record]` / `[CQ:video]` 的 `file` 参数若是**本机路径**，必须过 Hermes 的媒体白名单
+  （`gateway.media_delivery_allow_dirs`）—— 复用 Hermes 自己的策略，不另造一套，"哪些文件能出去"只有一个事实来源；
+- `[CQ:at,qq=all]`（@全体）默认不放行，要放开设 `allow_at_all: true`；
+- 未知 CQ 类型一律剥掉（默认拒绝）。
+
+净化的位置覆盖所有由**模型**产生文本的出口：普通消息、` ```CQ ` 代码块、长消息拆分、图片 caption。
+被剥掉的码会打警告日志，不会变成字面量发出去。
+
+> 走 `MEDIA:` 通道的附件不受影响：那条路由 Hermes 先过媒体白名单，再由 adapter 的
+> `send_image_file` / `send_document` 发出。
+
+### 3. 准入（默认全拒）
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `allowed_qq_ids` | 空 = 谁都不收 | 谁能触发机器人 |
+| `allowed_group_ids` | 空 = 一个群都不收 | 机器人能在哪些群工作 |
+| `group_command_requires_mention` | `true` | 群里的 `/xxx` 指令是否也要求 @机器人/关键词 |
+
+群白名单默认空是个**行为变更**：升级后不配置就收不到任何群消息（启动日志会明确提示）。
+要恢复旧行为可以写 `allowed_group_ids: all`，但那等于任何群都能用 —— 放进别人群时不建议。
+
+另外 `napcat_send_message` 指定目标时也会校验目标在白名单内，否则被允许的人（或提示注入）
+可以指挥机器人把消息发到白名单之外的任意群 / 任意 QQ 用户。
+
+### 传输层
+
+反向 WS 绑**非回环地址**时**必须**同时设置 `access_token`，否则拒绝启动 —— 否则任何能访问该端口的人
+都能伪造 QQ 事件（冒充任意用户/群，直接绕过用户白名单）、伪造 API 响应。
 
 ---
 
@@ -324,6 +388,8 @@ Hermes 默认日志级别为 WARNING，`logger.info()` 用户看不到，容易�
 [NapCat插件] 配置: HTTP接口=已启用 表情回应=未启用
 [NapCat插件] 配置: 机器人QQ号=未设置(自动学习) 合并转发阈值=800 引用文本最大字数=50
 [NapCat插件] 配置: 允许所有用户=否 白名单用户(2): 123456, 789012
+[NapCat插件] 配置: 群白名单(1): 123456
+[NapCat插件] 配置: 群指令需@/关键词=是
 [NapCat插件] 配置: 下载限制={'image': '10MB', 'record': '10MB', 'video': '10MB', 'file': '10MB'}
 [NapCat插件] 配置: 关键词触发模式数=2
 ```
@@ -336,6 +402,30 @@ Hermes 默认日志级别为 WARNING，`logger.info()` 用户看不到，容易�
 rm -rf ~/.hermes/plugins/napcat
 hermes gateway restart
 ```
+
+---
+
+## 🧪 测试
+
+安全策略与发送链路有回归测试（断言式，全绿时退出码 0）：
+
+```bash
+python tests/test_ws_hardening.py        # 反向 WS：绑定性 / 认证顺序 / 连接顶替
+python tests/test_action_policy.py       # API 动作白名单 + 路径校验
+python tests/test_cq_sanitize.py         # CQ 码净化（端到端打真 send()）
+python tests/test_access_control.py      # 群/用户白名单、群指令触发、出站目标
+python tests/test_send_robustness.py     # 脏数据不炸 / 长短消息行为一致
+```
+
+需要一个装了 Hermes 依赖的 python（`websockets`、`gateway` 等）。脚本会自动在
+`~/.hermes/installs/*/environments/*/workspace` 里找，找不到就用环境变量
+`HERMES_WORKSPACE` 指定。
+
+> ⚠️ `hermes plugins validate` 请在**插件目录之外**用绝对路径跑：
+> `cd ~ && hermes plugins validate /path/to/hermes-qq-onebot`。
+> 在插件目录里跑时探针子进程的 `sys.path[0]` 就是本目录，`import tools` 会命中本插件的
+> `tools.py` 而不是 Hermes 的 `tools/` 包，capability probe 会报
+> `No module named 'tools.xxx'; 'tools' is not a package` —— 那是假失败，不是插件的问题。
 
 ---
 
