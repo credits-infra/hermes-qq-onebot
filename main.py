@@ -174,6 +174,22 @@ class NapCat适配器(BasePlatformAdapter):
             i.lower() in ('all', '*') for i in self.允许的用户集合
         )
 
+        # ── 群白名单 ──
+        # 默认空 = 一个群都不收,与用户白名单同一套「失败即拒」姿态:这是个要放进
+        # 别人群的机器人,默认不能是「谁拉进去就在谁群里干活」。
+        # 要放开必须显式写 all / *(或列出群号),不做隐式全开。
+        self.允许的群集合: frozenset[str] = 解析号码名单(
+            获取配置("allowed_group_ids", "") or os.getenv("NAPCAT_ALLOWED_GROUPS", "")
+        )
+        self.允许所有群 = 名单是全放行(self.允许的群集合)
+
+        # ── 群里的斜杠指令是否也要求 @/关键词 ──
+        # 旧行为是「群里发 /xxx 不需要 @」,等于任何群友都能直接戳机器人跑指令。
+        # 默认收紧;要恢复旧行为显式设 group_command_requires_mention: false。
+        self.群指令需触发 = 解析布尔值(
+            获取配置("group_command_requires_mention", True), 默认=True
+        )
+
         # ── 内部状态 ──
         self.ws = WS(
             self._处理WS事件,
@@ -214,6 +230,14 @@ class NapCat适配器(BasePlatformAdapter):
             打印(f"配置: 允许所有用户=否 白名单用户({len(self.允许的用户集合)}): {用户列表}")
         else:
             打印("配置: 允许所有用户=否 白名单为空！请配置 NAPCAT_ALLOWED_USERS 环境变量或在插件配置中设置 allowed_qq_ids，否则无法接收任何消息")
+        if self.允许所有群:
+            打印("配置: 允许所有群=是（群白名单不生效）")
+        elif self.允许的群集合:
+            群列表 = ", ".join(sorted(self.允许的群集合))
+            打印(f"配置: 群白名单({len(self.允许的群集合)}): {群列表}")
+        else:
+            打印("配置: 群白名单为空！不会处理任何群消息；请配置 NAPCAT_ALLOWED_GROUPS 环境变量或 allowed_group_ids")
+        打印(f"配置: 群指令需@/关键词={'是' if self.群指令需触发 else '否（群里直接发 /xxx 也会响应）'}")
         打印(f"配置: 下载限制={ {k: f'{v//1024//1024}MB' for k, v in self.下载限制字节.items()} }")
         if self.关键词模式列表:
             模式列表 = ", ".join(模式.pattern for 模式 in self.关键词模式列表)
@@ -284,6 +308,11 @@ class NapCat适配器(BasePlatformAdapter):
         # ── 步骤3: 用户权限 ──
         if not (self.允许所有用户 or 用户ID in self.允许的用户集合):
             logger.info(f"✗ 用户「{昵称}（{用户ID}）」不在白名单，跳过此消息")
+            return
+
+        # ── 步骤3.5: 群白名单 ──
+        if 消息类型 == "group" and not self._群被允许(群ID):
+            logger.info(f"✗ 群「{群ID}」不在群白名单，跳过此消息")
             return
 
         # ── 步骤4: 群聊触发检测 ──
@@ -382,6 +411,10 @@ class NapCat适配器(BasePlatformAdapter):
 
     # ── 接收链路辅助方法 ──────────────────────────────────────────────
 
+    def _群被允许(self, 群ID: str) -> bool:
+        """该群是否在白名单内。默认(空名单)一个群都不放行。"""
+        return self.允许所有群 or 群ID in self.允许的群集合
+
     def _群聊触发检测(self, 消息段列表: list[dict]) -> bool:
         """群聊消息触发检测：@机器人 / 关键词 / 指令。"""
         机器人QQ号 = self.机器人QQ号
@@ -402,6 +435,11 @@ class NapCat适配器(BasePlatformAdapter):
             指令中有艾特 = any(段.get("type") == "at" for 段 in 消息段列表)
             if 指令中有艾特 and not 被艾特:
                 logger.info("✗ 指令@了别人，跳过")
+                return False
+            # 旧行为是群里直接发 /xxx 也响应,等于任何群友都能戳机器人跑指令。
+            # 默认要求与普通消息同样的触发条件(@/关键词)。
+            if self.群指令需触发 and not 被艾特 and not 关键词匹配:
+                logger.info("✗ 指令未@机器人且无关键词，跳过（group_command_requires_mention）")
                 return False
             logger.info("✓ 指令消息通过")
             return True

@@ -24,6 +24,9 @@ __all__ = [
 
     # 工具函数
     "解析文件大小",
+    "解析号码名单",
+    "名单是全放行",
+    "解析布尔值",
     "下载媒体文件",
 
     # 消息段构建（发送方向）
@@ -151,6 +154,40 @@ _单位倍率: dict[str, int] = {
     "G": 1024 ** 3, "GB": 1024 ** 3,
 }
 _单位正则 = re.compile(r'^(\d+\.?\d*)\s*([a-zA-Z]{1,3})$')
+
+
+def 解析号码名单(原始值: Any) -> frozenset[str]:
+    """把白名单配置解析成号码集合。
+
+    与用户白名单同一套口径:字符串(逗号分隔)/ 列表 / 裸数字(YAML 会把
+    `allowed_group_ids: 204676209` 解析成 int)。`all` / `*` 原样保留在集合里,
+    由调用方判断「是否全放行」。
+    """
+    if 原始值 is None or 原始值 == "":
+        return frozenset()
+    if isinstance(原始值, str):
+        return frozenset(x.strip() for x in 原始值.split(",") if x.strip())
+    if isinstance(原始值, (list, tuple, set, frozenset)):
+        return frozenset(str(i).strip() for i in 原始值 if str(i or "").strip())
+    if isinstance(原始值, (int, float)):
+        return frozenset([str(int(原始值))])
+    raise ValueError(
+        f"名单必须是字符串、列表或数字; 收到 {type(原始值).__name__}: {原始值!r}"
+    )
+
+
+def 名单是全放行(名单: frozenset[str]) -> bool:
+    """名单里是否写了 all / *(全放行开关)。"""
+    return any(x.lower() in ("all", "*") for x in 名单)
+
+
+def 解析布尔值(原始值: Any, 默认: bool = False) -> bool:
+    """宽容的布尔解析:YAML 的 true / 字符串 "true" / "1" / 中文「是」都算真。"""
+    if 原始值 is None or 原始值 == "":
+        return 默认
+    if isinstance(原始值, bool):
+        return 原始值
+    return str(原始值).strip().lower() in ("1", "true", "yes", "on", "是")
 
 
 def 解析文件大小(原始值) -> int:

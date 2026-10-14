@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from tools.registry import tool_error, tool_result
 
-from .security import 检查调用
+from .security import 检查调用, 检查发信目标
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,9 @@ NAPCAT_SEND_MESSAGE_SCHEMA = {
         "CQ 码格式示例：[CQ:image,file=http://example.com/img.jpg]\n"
         "            [CQ:face,id=178]\n"
         "            [CQ:at,qq=123456]\n"
-        "多条 CQ 码可拼接在消息文本中一起发送。"
+        "多条 CQ 码可拼接在消息文本中一起发送。\n"
+        "限制：目标必须已在群/用户白名单内，否则拒绝发送；[CQ:file] 与 @全体 不允许；\n"
+        "本地图片路径必须在运维的媒体白名单目录内。要发文件请用 MEDIA: 通道。"
     ),
     "parameters": {
         "type": "object",
@@ -126,6 +128,13 @@ async def _handle_send_message(args: dict, **kw) -> str:
         return tool_error("target_id 不能为空")
     if not 消息内容:
         return tool_error("message 不能为空")
+
+    # 出站目标也要过白名单:否则被允许的人(或提示注入)可以指挥机器人把消息发到
+    # 白名单之外的任意群 / 任意 QQ 用户。
+    拒绝理由 = 检查发信目标(目标类型, 目标ID)
+    if 拒绝理由:
+        logger.warning(f"拒绝发送到 {目标类型}:{目标ID}: {拒绝理由}")
+        return tool_error(拒绝理由)
 
     适配器 = _获取适配器()
     if 适配器 is None:
