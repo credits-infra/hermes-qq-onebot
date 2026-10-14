@@ -3,7 +3,7 @@ NapCat LLM 工具 — 供 Hermes Agent 调用的 QQ 消息发送与 OneBot API �
 
 两个工具：
   - napcat_send_message: 发送 QQ 消息（群聊/私聊），支持纯文本和 CQ 码
-  - napcat_call_action:  调用任意 OneBot v11 API 动作
+  - napcat_call_action:  调用 OneBot v11 API 动作（默认只放行只读查询，见 security.py）
 
 直接复用适配器实例的 WS 连接 / HTTP 调用器 / 发送逻辑（CQ码、合并转发、拆分等）。
 适配器实例由 adapter.py 的 _创建适配器 工厂函数在创建时存入模块级变量。
@@ -14,6 +14,8 @@ import logging
 from typing import Any, Optional
 
 from tools.registry import tool_error, tool_result
+
+from .security import 检查调用
 
 logger = logging.getLogger(__name__)
 
@@ -156,15 +158,18 @@ async def _handle_send_message(args: dict, **kw) -> str:
 NAPCAT_CALL_ACTION_SCHEMA = {
     "name": "napcat_call_action",
     "description": (
-        "调用 NapCat / OneBot v11 API 动作。\n"
-        "常用：\n"
+        "调用 NapCat / OneBot v11 API 动作。默认只放行只读查询类动作，例如：\n"
+        "  get_group_list — 群列表\n"
+        "  get_group_info — 群信息（params: group_id）\n"
+        "  get_group_member_info / get_group_member_list — 群成员（params: group_id）\n"
+        "  get_friend_list — 好友列表\n"
+        "  get_msg — 获取单条消息（params: message_id）\n"
         "  get_group_msg_history — 群历史消息（params: group_id）\n"
-        "  get_friend_msg_history — 私聊历史消息（params: user_id）\n"
-        "  delete_msg — 撤回消息（params: message_id）\n"
-        "  upload_group_file — 群发文件（params: group_id, file, name）\n"
-        "  upload_private_file — 私聊发文件（params: user_id, file, name）\n"
-        "  get_group_member_list — 群成员列表（params: group_id）\n"
-        "  get_msg — 获取单条消息（params: message_id）"
+        "  get_login_info / get_status / get_version_info — 账号与运行状态\n"
+        "改动状态、撤回删除、发送消息、上传文件等动作不在默认白名单内，调用会被拒绝。\n"
+        "需要用文件时请走 MEDIA: 通道（受运维的媒体白名单管理），不要试图用 API 绕过：\n"
+        "上传类动作的路径参数同样要过媒体白名单，绕不过去。\n"
+        "运维可在插件配置 allowed_actions 里放开更多动作。"
     ),
     "parameters": {
         "type": "object",
@@ -185,7 +190,7 @@ NAPCAT_CALL_ACTION_SCHEMA = {
 
 
 async def _handle_call_action(args: dict, **kw) -> str:
-    """调用任意 OneBot API 动作。"""
+    """调用 OneBot API 动作（经 security.py 的动作白名单 + 路径校验）。"""
     动作 = str(args.get("action") or "").strip()
     参数 = args.get("params") or {}
 
@@ -193,6 +198,12 @@ async def _handle_call_action(args: dict, **kw) -> str:
         return tool_error("action 不能为空")
     if not isinstance(参数, dict):
         return tool_error("params 必须是对象")
+
+    # 闸门在调用之前:不让动作白名单外的调用摸到 API,也不让路径白名单外的文件出去。
+    拒绝理由 = 检查调用(动作, 参数)
+    if 拒绝理由:
+        logger.warning(f"拒绝 OneBot 动作「{动作}」: {拒绝理由}")
+        return tool_error(拒绝理由)
 
     结果 = await _调用OneBotAPI(动作, 参数)
 
