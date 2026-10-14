@@ -83,6 +83,11 @@ def 主体():
     判定("没点名的 delete_msg 仍被拒", security.检查动作("delete_msg") is not None)
     判定("没点名的 get_group_msg_history 仍在默认白名单里",
          security.检查动作("get_group_msg_history") is None)
+    设配置({"allowed_actions": '["upload_group_file"]'})
+    判定("config 写 JSON 数组字符串同样生效",
+         security.检查动作("upload_group_file") is None)
+    设配置({"allowed_actions": "upload_group_file;delete_msg"})
+    判定("分号分隔同样生效", security.检查动作("delete_msg") is None)
 
     print("\n③ 全放行模式:凭据类仍然拦")
     设配置({"allowed_actions": "all"})

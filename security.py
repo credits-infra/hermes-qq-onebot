@@ -90,10 +90,10 @@ def 解析动作策略(原始: Any) -> tuple[frozenset, bool]:
     """
     if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
         return 默认允许的动作, False
-    if isinstance(原始, (list, tuple, set, frozenset)):
-        项 = [str(x).strip() for x in 原始 if str(x).strip()]
-    else:
-        项 = [x.strip() for x in str(原始).replace(";", ",").split(",") if x.strip()]
+    from .tools import 解析列表配置
+
+    # 走公共解析:环境变量可能写成 JSON 数组('["a","b"]'),只按逗号切会切错。
+    项 = 解析列表配置(原始) or []
     if any(x.lower() in ("all", "*") for x in 项):
         return frozenset(), True
     return frozenset(默认允许的动作 | frozenset(项)), False
@@ -308,10 +308,9 @@ def 解析CQ类型策略(原始: Any) -> tuple[frozenset, bool]:
     """解析 allowed_cq_types。语义与动作白名单一致:点名是【追加】在默认之上。"""
     if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
         return 默认允许的CQ类型, False
-    if isinstance(原始, (list, tuple, set, frozenset)):
-        项 = [str(x).strip().lower() for x in 原始 if str(x).strip()]
-    else:
-        项 = [x.strip().lower() for x in str(原始).replace(";", ",").split(",") if x.strip()]
+    from .tools import 解析列表配置
+
+    项 = [x.lower() for x in (解析列表配置(原始) or [])]
     if any(x in ("all", "*") for x in 项):
         return frozenset(), True
     return frozenset(默认允许的CQ类型 | frozenset(项)), False

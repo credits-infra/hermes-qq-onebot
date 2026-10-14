@@ -8,6 +8,7 @@
     python tests/test_access_control.py
 """
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,15 @@ _序号 = [0]
 def 判定(名, 通过, 详情=""):
     结果.append((名, 通过))
     print(f"  {'✅ PASS' if 通过 else '❌ FAIL'}  {名}" + (f"   {详情}" if 详情 else ""))
+
+
+def _报错(函数) -> bool:
+    """函数是否按预期抛了异常。"""
+    try:
+        函数()
+    except Exception:
+        return True
+    return False
 
 
 def 造适配器(extra):
@@ -76,6 +86,10 @@ def 主体():
     判定("空配置 → 空集合", tools.解析号码名单("") == frozenset())
     判定("all 被识别为全放行", tools.名单是全放行(tools.解析号码名单("all")))
     判定("数字群号不算全放行", not tools.名单是全放行(tools.解析号码名单("111")))
+    判定("JSON 数组字符串(README 的写法)",
+        tools.解析号码名单('["111", "222"]') == frozenset({"111", "222"}))
+    判定("分号分隔也认", tools.解析号码名单("111;222") == frozenset({"111", "222"}))
+    判定("非法类型仍然报错", _报错(lambda: tools.解析号码名单({"a": 1})))
 
     print("\n② 群白名单:默认空 = 一个群都不收")
     a = 造适配器(基础配置)
@@ -91,6 +105,15 @@ def 主体():
 
     a = 造适配器({**基础配置, "allowed_group_ids": "all"})
     判定("群白名单=all 时任意群可进", bool(跑事件(a, 群事件("10001", "999", "你好", 艾特=True))))
+
+    a = 造适配器({**基础配置, "allowed_group_ids": '["111", "222"]'})
+    判定("config 里写 JSON 数组字符串也能用",
+        a._群被允许("111") and a._群被允许("222"))
+
+    os.environ["NAPCAT_ALLOWED_GROUPS"] = '["111", "222"]'
+    a = 造适配器(基础配置)
+    判定("环境变量 NAPCAT_ALLOWED_GROUPS 的 JSON 数组形式也能解析", a._群被允许("222"))
+    del os.environ["NAPCAT_ALLOWED_GROUPS"]
 
     print("\n④ 群里的斜杠指令:默认也要求 @/关键词")
     a = 造适配器({**基础配置, "allowed_group_ids": [111]})

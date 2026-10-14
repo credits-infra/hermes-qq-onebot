@@ -24,6 +24,7 @@ __all__ = [
 
     # 工具函数
     "解析文件大小",
+    "解析列表配置",
     "解析号码名单",
     "名单是全放行",
     "解析布尔值",
@@ -57,6 +58,7 @@ __all__ = [
     "打印",
 ]
 
+import json
 import logging
 import os
 import re
@@ -156,24 +158,50 @@ _单位倍率: dict[str, int] = {
 _单位正则 = re.compile(r'^(\d+\.?\d*)\s*([a-zA-Z]{1,3})$')
 
 
+def 解析列表配置(原始值: Any) -> Optional[list[str]]:
+    """把「JSON 数组字符串 / 逗号分隔字符串 / 列表 / 裸数字」统一成字符串列表。
+
+    必须容忍 JSON 数组:本插件的约定是环境变量先做 JSON 解析(README 里写的是
+    `NAPCAT_ALLOWED_QQ_IDS='[123, 456]'`),只按逗号切会把它切成 `["[123"` 和 `"456]"`。
+
+    无法解析时返回 None(调用方决定是报错还是当空)。
+    """
+    if 原始值 is None or 原始值 == "":
+        return None
+    if isinstance(原始值, bool):
+        return None
+    if isinstance(原始值, (list, tuple, set, frozenset)):
+        return [str(x).strip() for x in 原始值 if str(x or "").strip()]
+    if isinstance(原始值, (int, float)):
+        return [str(int(原始值))]
+    if isinstance(原始值, str):
+        文本 = 原始值.strip()
+        if 文本.startswith("[") and 文本.endswith("]"):
+            try:
+                解析 = json.loads(文本)
+            except json.JSONDecodeError:
+                解析 = None
+            if isinstance(解析, list):
+                return [str(x).strip() for x in 解析 if str(x or "").strip()]
+        return [x.strip() for x in 文本.replace(";", ",").split(",") if x.strip()]
+    return None
+
+
 def 解析号码名单(原始值: Any) -> frozenset[str]:
     """把白名单配置解析成号码集合。
 
-    与用户白名单同一套口径:字符串(逗号分隔)/ 列表 / 裸数字(YAML 会把
+    接受字符串(逗号分隔,或 JSON 数组)/ 列表 / 裸数字(YAML 会把
     `allowed_group_ids: 204676209` 解析成 int)。`all` / `*` 原样保留在集合里,
     由调用方判断「是否全放行」。
     """
-    if 原始值 is None or 原始值 == "":
-        return frozenset()
-    if isinstance(原始值, str):
-        return frozenset(x.strip() for x in 原始值.split(",") if x.strip())
-    if isinstance(原始值, (list, tuple, set, frozenset)):
-        return frozenset(str(i).strip() for i in 原始值 if str(i or "").strip())
-    if isinstance(原始值, (int, float)):
-        return frozenset([str(int(原始值))])
-    raise ValueError(
-        f"名单必须是字符串、列表或数字; 收到 {type(原始值).__name__}: {原始值!r}"
-    )
+    项 = 解析列表配置(原始值)
+    if 项 is None:
+        if 原始值 is None or 原始值 == "":
+            return frozenset()
+        raise ValueError(
+            f"名单必须是字符串、列表或数字; 收到 {type(原始值).__name__}: {原始值!r}"
+        )
+    return frozenset(项)
 
 
 def 名单是全放行(名单: frozenset[str]) -> bool:
