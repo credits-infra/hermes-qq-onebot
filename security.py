@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
@@ -226,3 +227,108 @@ def 检查调用(动作: str, 参数: Any) -> Optional[str]:
         if 错误:
             return f"参数 {键}:{错误}"
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CQ 码净化
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 默认允许的 CQ 类型。file 刻意不在其中:[CQ:file,...] 是「服务器按这个路径取文件
+# 发出去」,和 upload_group_file 是同一条外泄路。要发文件请走 MEDIA: 通道 ——
+# 那条由 Hermes 先过媒体白名单,再由 adapter 的 send_document 送。
+默认允许的CQ类型 = frozenset({"face", "at", "image", "record", "video", "reply"})
+永不放过的CQ类型 = frozenset({"file", "onlinefile", "flash"})
+需校验路径的CQ类型 = frozenset({"image", "record", "video"})
+
+CQ码正则 = re.compile(r"\[CQ:([A-Za-z_]+)((?:,[^\]]*)?)\]")
+_CQ参数正则 = re.compile(r"([A-Za-z_]+)=([^,\]]*)")
+_CQ转义表 = (("&#44;", ","), ("&#91;", "["), ("&#93;", "]"), ("&amp;", "&"))
+
+
+def _反转义CQ值(值: str) -> str:
+    结果 = 值
+    for 原, 新 in _CQ转义表:
+        结果 = 结果.replace(原, 新)
+    return 结果
+
+
+def _CQ参数(原始参数: str) -> dict[str, str]:
+    参数: dict[str, str] = {}
+    for 匹配 in _CQ参数正则.finditer(原始参数 or ""):
+        参数[匹配.group(1).lower()] = _反转义CQ值(匹配.group(2))
+    return 参数
+
+
+def 解析CQ类型策略(原始: Any) -> tuple[frozenset, bool]:
+    """解析 allowed_cq_types。语义与动作白名单一致:点名是【追加】在默认之上。"""
+    if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
+        return 默认允许的CQ类型, False
+    if isinstance(原始, (list, tuple, set, frozenset)):
+        项 = [str(x).strip().lower() for x in 原始 if str(x).strip()]
+    else:
+        项 = [x.strip().lower() for x in str(原始).replace(";", ",").split(",") if x.strip()]
+    if any(x in ("all", "*") for x in 项):
+        return frozenset(), True
+    return frozenset(默认允许的CQ类型 | frozenset(项)), False
+
+
+def 当前CQ类型策略() -> tuple[frozenset, bool]:
+    原始 = 当前额外配置().get("allowed_cq_types")
+    if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
+        原始 = os.getenv("NAPCAT_ALLOWED_CQ_TYPES")
+    return 解析CQ类型策略(原始)
+
+
+def 允许艾特全体() -> bool:
+    """`[CQ:at,qq=all]`(群里 @全体成员)默认不放行。"""
+    原始 = 当前额外配置().get("allow_at_all")
+    if 原始 is None:
+        原始 = os.getenv("NAPCAT_ALLOW_AT_ALL", "")
+    return str(原始).strip().lower() in ("1", "true", "yes", "on")
+
+
+def 净化CQ码(文本: str) -> tuple[str, list[str]]:
+    """剥掉策略不允许的 CQ 码,返回 (净化后文本, 丢弃说明列表)。
+
+    只处理**模型自己拼出来**的文本。走 MEDIA: 通道的附件由 Hermes 先校验、再由
+    adapter 的 send_image_file / send_document 发出,不经过这里 —— 所以这里严格
+    按策略剥掉,不会误伤合法附件。
+
+    选择「剥掉」而不是「转义成纯文本」:目的是让它发不出去,同时日志里留下痕迹
+    (转义会让攻击者看到自己拼的码原样显示,也给不出安全日志)。
+    """
+    if not 文本 or "[CQ:" not in 文本:
+        return 文本, []
+
+    允许集, 全放 = 当前CQ类型策略()
+    允许全体 = 允许艾特全体()
+    丢弃: list[str] = []
+
+    def _替换(匹配: "re.Match[str]") -> str:
+        类型 = 匹配.group(1).lower()
+        if 类型 in 永不放过的CQ类型:
+            丢弃.append(f"[CQ:{类型}] 会按路径读取服务器文件并发出,不放行")
+            return ""
+        if not 全放 and 类型 not in 允许集:
+            丢弃.append(f"[CQ:{类型}] 不在允许的 CQ 类型内")
+            return ""
+
+        参数 = _CQ参数(匹配.group(2))
+
+        if 类型 == "at" and 参数.get("qq", "").strip().lower() == "all" and not 允许全体:
+            丢弃.append("[CQ:at,qq=all] 是 @全体成员,默认不放行(要放开设 allow_at_all: true)")
+            return ""
+
+        if 类型 in 需校验路径的CQ类型:
+            文件 = 参数.get("file", "")
+            if not 文件:
+                丢弃.append(f"[CQ:{类型}] 缺少 file 参数")
+                return ""
+            错误 = 校验本地路径(文件)
+            if 错误:
+                丢弃.append(f"[CQ:{类型}] {错误}")
+                return ""
+
+        return 匹配.group()
+
+    return CQ码正则.sub(_替换, 文本), 丢弃

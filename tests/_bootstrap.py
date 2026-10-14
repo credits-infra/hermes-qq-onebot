@@ -9,6 +9,7 @@ import os
 import sys
 import types
 from pathlib import Path
+from typing import Optional
 
 仓库根 = Path(__file__).resolve().parent.parent
 
@@ -44,3 +45,48 @@ def 加载包(*模块: str) -> types.ModuleType:
         sys.modules[全名] = m
         spec.loader.exec_module(m)
     return sys.modules["napcat_plugin"]
+
+
+def 注册napcat平台() -> None:
+    """把 napcat 注册进 platform_registry,让 `Platform("napcat")` 能解析。
+
+    Platform 的动态成员由 Enum 的 `_missing_` 在 `platform_registry.is_registered(name)`
+    为真时按需创建(注释原话:"Plugin platforms are dynamic members created on demand")。
+    真实运行时的顺序是「先加载插件(register_platform) → 再建适配器」,测试里要自己
+    补这一步 —— 否则构造适配器时会 ValueError: 'napcat' is not a valid Platform。
+    """
+    if getattr(注册napcat平台, "_已注册", False):
+        return
+    from gateway.platform_registry import PlatformEntry, platform_registry
+
+    try:
+        platform_registry.register(PlatformEntry(
+            name="napcat", label="NapCat (QQ)",
+            adapter_factory=lambda cfg: None, check_fn=lambda: True, source="plugin",
+        ))
+    except Exception:
+        pass  # 已注册过就跳过
+    注册napcat平台._已注册 = True  # type: ignore[attr-defined]
+
+
+def 建立临时媒体策略(允许目录: Path, 父目录: Optional[Path] = None) -> Path:
+    """造一个带「严格媒体白名单」的临时 profile,并把 HERMES_HOME override 指过去。
+
+    ⚠️ 必须用 set_hermes_home_override 而不是 HERMES_HOME 环境变量:media_policy 读的
+    是进程内 ContextVar 路由到的 profile 配置(multiplex 每个 profile turn 设置),
+    只设环境变量会读回空值、把「策略没生效」误判成代码有问题。
+    """
+    档案 = (父目录 or 允许目录.parent) / "profile"
+    档案.mkdir(parents=True, exist_ok=True)
+    (档案 / "config.yaml").write_text(
+        "gateway:\n"
+        "  strict: true\n"
+        "  trust_recent_files: false\n"
+        "  media_delivery_allow_dirs:\n"
+        f"    - {允许目录}\n",
+        encoding="utf-8",
+    )
+    from hermes_constants import set_hermes_home_override
+
+    set_hermes_home_override(str(档案))
+    return 档案

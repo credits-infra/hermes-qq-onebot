@@ -28,6 +28,7 @@ from gateway.platforms.base import (
 )
 from gateway.platforms.helpers import MessageDeduplicator
 
+from .security import 净化CQ码
 from .tools import *
 from .ws import WS
 from .napcat_http import NapcatHttp
@@ -753,6 +754,15 @@ class NapCat适配器(BasePlatformAdapter):
         CQ文本 = 内容[len("```CQ"):].rsplit("```", 1)[0].strip()
         if not CQ文本:
             return SendResult(success=False, error="CQ码块内容为空")
+
+        # 模型自己写的 CQ 码要过安全策略:[CQ:file,...] 是「按这个路径读本机文件发
+        # 出去」,和 upload_group_file 是同一条外泄路,一律不放过。
+        CQ文本, 丢弃说明 = 净化CQ码(CQ文本)
+        if 丢弃说明:
+            logger.warning(f"CQ码块中被安全策略剥掉: {'; '.join(丢弃说明)}")
+        if not CQ文本.strip():
+            return SendResult(success=False, error="CQ码块内容全部被安全策略剥掉")
+
         if 回复CQ前缀:
             CQ文本 = 回复CQ前缀 + CQ文本
         logger.info(f"CQ码: {CQ文本[:80]}")
@@ -782,12 +792,15 @@ class NapCat适配器(BasePlatformAdapter):
         纯文本部分 = "".join(片段 for 类型, 片段 in 片段列表 if 类型 == "text")
 
         if CQ码列表:
-            CQ消息 = "".join(CQ码列表)
-            logger.info(f"CQ码单独发送: {CQ消息[:80]}")
-            try:
-                await self._执行发送(会话ID, 消息类型, 目标ID, CQ消息)
-            except Exception as e:
-                logger.error(f"CQ码发送失败: {e}")
+            CQ消息, 丢弃说明 = 净化CQ码("".join(CQ码列表))
+            if 丢弃说明:
+                logger.warning(f"长消息中被安全策略剥掉: {'; '.join(丢弃说明)}")
+            if CQ消息.strip():
+                logger.info(f"CQ码单独发送: {CQ消息[:80]}")
+                try:
+                    await self._执行发送(会话ID, 消息类型, 目标ID, CQ消息)
+                except Exception as e:
+                    logger.error(f"CQ码发送失败: {e}")
 
         # ── 没有纯文本了，不需要合并转发 ──
         if not 纯文本部分.strip():
@@ -864,7 +877,13 @@ class NapCat适配器(BasePlatformAdapter):
         self, chat_id: str, content: str, 回复CQ前缀: str
     ) -> SendResult:
         """发送普通文本消息（CQ 码字符串格式）。"""
-        CQ文本 = 回复CQ前缀 + 文本转CQ码字符串(content)
+        # 安全闸门:文本转CQ码字符串 不做任何转义,正文里的 [CQ:...] 会被当指令发出,
+        # 所以模型写的 CQ 码必须先过策略(见 security.净化CQ码)。
+        净化后, 丢弃说明 = 净化CQ码(content)
+        if 丢弃说明:
+            logger.warning(f"消息中被安全策略剥掉: {'; '.join(丢弃说明)}")
+
+        CQ文本 = 回复CQ前缀 + 文本转CQ码字符串(净化后)
         if not CQ文本.strip():
             return SendResult(success=False, error="消息为空")
 
@@ -919,6 +938,9 @@ class NapCat适配器(BasePlatformAdapter):
 
         CQ文本 = ""
         if caption and caption.strip():
+            caption, 丢弃说明 = 净化CQ码(caption)
+            if 丢弃说明:
+                logger.warning(f"图片说明中被安全策略剥掉: {'; '.join(丢弃说明)}")
             CQ文本 = caption
         CQ文本 += f"[CQ:image,file={image_url}]"
 
