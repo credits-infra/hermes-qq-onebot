@@ -1,15 +1,82 @@
 name: napcat
 kind: platform
-version: 3.1.0
+version: 3.2.0
+requires_hermes: ">=0.21.6"
 description: >
   NapCat QQ 适配器 — 基于 OneBot v11 协议。
   支持 NapCat / go-cqhttp / Lagrange.OneBot / LLOneBot 等兼容实现。
   中文变量名，代码结构清晰。
   支持表情回应、关键词触发、合并转发等。
-  附带 LLM 工具：napcat_send_message（发消息）、napcat_call_action（调用任意 OneBot API）。
+  附带 LLM 工具：napcat_send_message（发消息）、napcat_call_action（调用 OneBot API）。
+  含出站安全策略：API 动作白名单、CQ 码净化、群/用户白名单、媒体白名单路径校验。
 author: 懒大猫
 homepage: https://github.com/landamao/hermes-qq-onebot
 requires_env: []
 provides_tools:
   - napcat_send_message
   - napcat_call_action
+
+# 配置键说明。类型不符只会产生警告，不会阻断加载（见 plugins_manifest 的
+# validate_config_against_schema），所以「逗号分隔字符串或列表都行」的键刻意不声明
+# type，免得给正常配置报无意义的警告。
+config_schema:
+  # ── 准入（默认全拒，必须显式配）──
+  allowed_qq_ids:
+    description: 允许触发机器人的 QQ 号；逗号分隔或列表；写 all 表示不限制。默认空 = 谁都不收。
+  allowed_group_ids:
+    description: 允许机器人工作的群号；逗号分隔或列表；写 all 表示不限制。默认空 = 一个群都不收。
+  group_command_requires_mention:
+    type: bool
+    default: true
+    description: 群里的斜杠指令是否也要求 @机器人/关键词。默认 true；设 false 恢复旧行为。
+  bot_self_id:
+    type: str
+    description: 机器人自己的 QQ 号。留空则从事件中自动学习。
+
+  # ── 出站安全 ──
+  allowed_actions:
+    description: >-
+      额外放行的 OneBot 动作名（逗号分隔或列表），追加在只读默认白名单之上；
+      写 all 放行全部。交出账号凭据的动作（get_cookies 等）永不放行。
+  allowed_cq_types:
+    description: >-
+      额外放行的 CQ 码类型，追加在默认之上（默认 face / at / image / record /
+      video / reply）。[CQ:file] 永不放过。
+  allow_at_all:
+    type: bool
+    default: false
+    description: 是否允许 [CQ:at,qq=all]（群里 @全体成员）。默认 false。
+
+  # ── 传输 ──
+  reverse_host:
+    type: str
+    default: 127.0.0.1
+    description: 反向 WS 监听地址。绑非回环地址时必须同时设置 access_token，否则拒绝启动。
+  reverse_port:
+    type: int
+    default: 6700
+    description: 反向 WS 监听端口。
+  access_token:
+    type: secret
+    description: 反向 WS 访问令牌（别名 reverse_token）。强烈建议设置。
+
+  # ── 触发行文 ──
+  mention_patterns:
+    description: 群聊关键词触发用的正则列表；命中即视为被触发，无需 @。
+  merge_forward_threshold:
+    type: int
+    description: 超过该长度的群消息改用合并转发。默认 2500。
+  forward_name:
+    type: str
+    description: 合并转发节点显示的昵称。
+  reply_text_max_length:
+    type: int
+    description: 引用回复文本截断长度。
+  emoji_react:
+    type: bool
+    description: 收到消息时是否加表情回应。
+
+  # ── 下载限制 ──
+  download_limits:
+    type: dict
+    description: "各媒体类型的下载大小上限，如 image: 10MB、video: 50MB。"
