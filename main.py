@@ -845,7 +845,13 @@ class NapCat适配器(BasePlatformAdapter):
             return SendResult(success=True)
 
         # ── 纯文本走合并转发 ──
-        节点列表 = self._构建合并转发节点(纯文本部分, 回复目标)
+        # 构建节点也可能失败(脏数据/异常字段)。这里必须兜住:调用方靠 None 回退到
+        # 拆分发送,让异常直接冒出去会让整条回复丢掉。
+        try:
+            节点列表 = self._构建合并转发节点(纯文本部分, 回复目标)
+        except Exception as e:
+            logger.debug(f"构建合并转发节点失败: {e}, 回退到拆分")
+            return None
 
         try:
             if 消息类型 == "group":
@@ -866,14 +872,25 @@ class NapCat适配器(BasePlatformAdapter):
     ) -> list[dict]:
         """构建合并转发节点列表。"""
         节点列表: list[dict] = []
+        # 回复目标是什么就传什么,不保证是数字;int() 抛 ValueError 会让整条 send() 失败。
+        # 拿不到合法数字就退化成「不带回复节点的转发」,不要因为一个装饰性字段炸掉发送。
         if 回复目标:
-            节点列表.append({"type": "node", "data": {"id": int(回复目标)}})
+            if str(回复目标).lstrip("-").isdigit():
+                节点列表.append({"type": "node", "data": {"id": int(回复目标)}})
+            else:
+                logger.warning(f"回复目标「{回复目标}」不是数字，合并转发不带回复节点")
 
         机器人ID = self.机器人QQ号 or "0"
+        try:
+            机器人数字ID = int(机器人ID)
+        except (ValueError, TypeError):
+            # bot_self_id 配了非数字(或尚未自动学到)时,别让它炸掉整个转发。
+            logger.warning(f"机器人QQ号「{机器人ID}」不是数字，转发节点用 0 占位")
+            机器人数字ID = 0
         节点列表.append({
             "type": "node",
             "data": {
-                "uin": int(机器人ID),
+                "uin": 机器人数字ID,
                 "name": self.合并转发昵称,
                 "content": [构建文本段(纯文本)],
             },
@@ -883,31 +900,39 @@ class NapCat适配器(BasePlatformAdapter):
     async def _发送拆分消息(
         self, chat_id: str, content: str, 回复目标: Optional[str]
     ) -> SendResult:
-        """超长消息拆分发送，在段落/句子边界处拆分。"""
+        """超长消息拆分发送，在段落/句子边界处拆分。
+
+        与短消息走同一条「CQ 码字符串」路线。此前这里用段数组,而段数组里的
+        `[CQ:...]` 会被当**纯文本**原样显示,同一段内容在短消息里是码、在长消息里
+        是字面量 —— 同一个机器人两种行为,排查起来很费劲。统一成 CQ 字符串,
+        并同样过安全策略。
+        """
+        消息类型, 目标ID = self._解析投递目标(chat_id)
+        if 消息类型 is None:
+            return SendResult(success=False, error=目标ID)
+
         段落列表 = 拆分长文本(content)
         logger.info(f"拆分为 {len(段落列表)} 段")
 
         for 段索引, 段落 in enumerate(段落列表):
-            消息段 = 构建消息段数组(段落, 回复目标=回复目标)
-            if not 消息段:
+            净化后, 丢弃说明 = 净化CQ码(段落)
+            if 丢弃说明:
+                logger.warning(f"第{段索引 + 1}段中被安全策略剥掉: {'; '.join(丢弃说明)}")
+
+            回复前缀 = f"[CQ:reply,id={回复目标}]" if (段索引 == 0 and 回复目标) else ""
+            CQ文本 = 回复前缀 + 文本转CQ码字符串(净化后)
+            if not CQ文本.strip():
                 continue
+
             try:
-                消息类型, 目标ID = self._解析投递目标(chat_id)
-                if 消息类型 is None:
-                    return SendResult(success=False, error=目标ID)
-                if 消息类型 == "group":
-                    结果 = await self.ws.发送群聊消息(目标ID, 消息段)
-                else:
-                    结果 = await self.ws.发送私聊消息(目标ID, 消息段)
-                if 结果.get("status") == "failed" or 结果.get("retcode", 0) != 0:
-                    错误 = 结果.get("wording") or 结果.get("msg") or "未知错误"
-                    logger.error(f"段{段索引 + 1}/{len(段落列表)} 发送失败: {错误}")
-                    return SendResult(success=False, error=f"段{段索引+1}发送失败: {错误}")
+                结果 = await self._执行发送(chat_id, 消息类型, 目标ID, CQ文本)
+                if not 结果.success:
+                    logger.error(f"段{段索引 + 1}/{len(段落列表)} 发送失败: {结果.error}")
+                    return 结果
                 logger.info(f"段{段索引 + 1}/{len(段落列表)} 发送完成")
             except Exception as e:
                 logger.error(f"段{段索引+1}发送异常: {e}")
                 return SendResult(success=False, error=str(e))
-            回复目标 = None  # 只有第一段带回复
 
         return SendResult(success=True)
 
