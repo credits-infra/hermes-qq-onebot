@@ -222,11 +222,36 @@ def 遍历参数里的路径(参数: Any, 前缀: str = "") -> Iterable[tuple[st
                     yield from 遍历参数里的路径(子项, f"{全名}[{序号}].")
 
 
+def _检查目标参数(动作: str, 参数: dict) -> Optional[str]:
+    """会「动手」的动作,其群 / 用户目标也要在白名单内。
+
+    只读动作(默认白名单里的那些)不查:它只是看,不产生对外影响,而列出一个非
+    白名单群的成员列表本身无害。可一旦运维放行了 send_group_msg 这类**独立发送口**,
+    参数里的 group_id 就是第二条出站通道 —— 不查白名单,模型就能往任意群发东西
+    (交叉评审 M1:实测 {"group_id": 999999, "message": "[CQ:file,...]"} 原样通过)。
+    """
+    if 动作 in 默认允许的动作:
+        return None
+    for 键, 类型 in (("group_id", "group"), ("group", "group"),
+                     ("user_id", "private"), ("user", "private"), ("qq", "private")):
+        值 = 参数.get(键)
+        if 值 in (None, ""):
+            continue
+        错误 = 检查发信目标(类型, str(值))
+        if 错误:
+            return f"参数「{键}」:{错误}"
+    return None
+
+
 def 检查调用(动作: str, 参数: Any) -> Optional[str]:
     """动作 + 参数的整体检查。None=放行,否则返回拒绝说明。"""
     错误 = 检查动作(动作)
     if 错误:
         return 错误
+    if isinstance(参数, dict):
+        错误 = _检查目标参数(str(动作 or "").strip(), 参数)
+        if 错误:
+            return 错误
     for 键, 值 in 遍历参数里的路径(参数 or {}):
         错误 = 校验本地路径(值)
         if 错误:

@@ -150,6 +150,9 @@ def 主体():
     判定("授权后,/etc/passwd 仍被路径白名单拦下", len(记录) == 0, 输出[:70])
 
     # 显式授权 + 路径在白名单内 → 放行,真的调 API
+    # (同时给出群白名单:授权只解决「动作能不能用」,目标群还要在白名单内 —— 见
+    #  检查调用 的目标参数校验)
+    设配置({"allowed_actions": ["upload_group_file"], "allowed_group_ids": ["123"]})
     输出, 记录 = 跑工具({"action": "upload_group_file",
                      "params": {"group_id": 123, "file": str(好文件), "name": "x"}})
     判定("授权 + 白名单内路径 → 真的调了 API",
