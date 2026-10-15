@@ -1,6 +1,6 @@
 name: napcat
 kind: platform
-version: 3.4.0
+version: 3.5.0
 requires_hermes: ">=0.21.6"
 description: >
   NapCat QQ 适配器 — 基于 OneBot v11 协议。
