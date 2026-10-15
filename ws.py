@@ -4,11 +4,12 @@ import ipaddress
 import json
 import logging
 import os
+import stat
 import time
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 import websockets
-from websockets.asyncio.server import ServerConnection
+from websockets.asyncio.server import ServerConnection, unix_serve
 
 from .tools import 打印
 
@@ -34,6 +35,20 @@ def _是回环地址(地址: str) -> bool:
         return ipaddress.ip_address(值).is_loopback
     except ValueError:
         return False
+
+
+def _是套接字路径(地址: str) -> bool:
+    """配置的是 Unix socket 路径（以 ``/`` 开头），不是 TCP 地址。"""
+    return str(地址 or "").strip().startswith("/")
+
+
+def _是本地监听(地址: str) -> bool:
+    """监听是否只对本机可达：Unix socket 路径，或回环地址。
+
+    Unix socket 的访问控制由内核按文件属主/权限位判定，所以它算本地监听，
+    不适用「非回环必须带令牌」那条规则（令牌仍建议设，作为第二道）。
+    """
+    return _是套接字路径(地址) or _是回环地址(地址)
 
 
 # 实现「我没有这个动作」的几种说法。LLOneBot/LuckyLilliaBot 对未实现的动作返
@@ -62,18 +77,24 @@ class WS:
         监听地址: str = "127.0.0.1",
         监听端口: int = 6700,
         访问令牌: str = "",
+        套接字属组: str = "",
     ):
         """
         参数:
             事件处理器: 异步回调，处理收到的 OneBot 事件。
-            监听地址: 绑定地址（如 "0.0.0.0" 或 "127.0.0.1"）。
-            监听端口: 绑定端口（如 6700）。
+            监听地址: 绑定地址（如 "0.0.0.0" / "127.0.0.1"），或以 ``/`` 开头的
+                Unix socket 路径（如 "/dev/shm/napcat.sock"）。
+            监听端口: 绑定端口（如 6700）。socket 模式下不用。
             访问令牌: 可选 Bearer token，用于认证 NapCat 等客户端。
+            套接字属组: socket 模式下把 socket 的属组改到该组（如 "caddy"），
+                让以别的用户身份运行的反向代理能连上。
         """
         self._事件处理器 = 事件处理器
         self._监听地址 = 监听地址
         self._监听端口 = 监听端口
         self._访问令牌 = 访问令牌
+        self._套接字属组 = 套接字属组
+        self._套接字路径: str = ""
 
         self._ws连接实例: Optional[ServerConnection] = None
         self._待响应映射表: dict[str, asyncio.Future] = {}
@@ -87,9 +108,10 @@ class WS:
 
     async def 启动(self) -> None:
         """启动反向 WS 服务端（使用 __init__ 中保存的配置）。"""
-        # 失败即拒：非回环地址 + 无令牌 = 谁都能伪造事件。宁可启动不了，也不要
-        # 一个看起来正常、实际对全网敞开的入口。
-        if not _是回环地址(self._监听地址) and not self._访问令牌:
+        # 失败即拒：非本地监听 + 无令牌 = 谁都能伪造事件。宁可启动不了，也不要
+        # 一个看起来正常、实际对全网敞开的入口。Unix socket 属本地（访问控制由
+        # 文件权限负责），不受这条约束。
+        if not _是本地监听(self._监听地址) and not self._访问令牌:
             raise ValueError(
                 f"拒绝启动：监听地址「{self._监听地址}」不是回环地址，却没有设置访问令牌。"
                 "请把 reverse_host 改回 127.0.0.1，或同时设置 access_token。"
@@ -97,6 +119,10 @@ class WS:
 
         async def _处理连接(ws连接: ServerConnection):
             await self._认证并处理连接(ws连接) # type: ignore[attr-defined]
+
+        if _是套接字路径(self._监听地址):
+            await self._启动套接字(_处理连接)
+            return
 
         self._服务端 = await websockets.serve(
             _处理连接,
@@ -108,6 +134,59 @@ class WS:
         logger.info(f"反向WS服务端启动：ws://{self._监听地址}:{self._监听端口}，等待连接")
         打印(f"反向WS服务端启动：ws://{self._监听地址}:{self._监听端口}，等待连接")
 
+    async def _启动套接字(self, 处理器) -> None:
+        """在 Unix socket 上监听。
+
+        这个模式解决两件事：TCP 监听要么占端口、要么（绑回环时）对本机任何用户
+        敞开，只能靠令牌拦；socket 文件把访问控制交给内核（属主 + 权限位 + 属组），
+        也不经过 TCP 栈。反向代理用 ``reverse_proxy unix//<路径>`` 接它，注意
+        不能用 ``unix+h2c//`` —— 那个传输不承载 WebSocket 的 Upgrade。
+        """
+        路径 = str(self._监听地址).strip()
+        if os.path.exists(路径):
+            # 上次没退干净会留下一个死 socket，bind 直接报 EADDRINUSE。
+            if stat.S_ISSOCK(os.stat(路径).st_mode):
+                os.unlink(路径)
+                logger.info(f"清掉上次残留的 socket 文件：{路径}")
+            else:
+                raise ValueError(
+                    f"拒绝启动：套接字路径「{路径}」已被同名文件占用，且它不是 socket。"
+                    "请换一个路径或先处理该文件。"
+                )
+
+        self._服务端 = await unix_serve(处理器, 路径, ping_interval=20, ping_timeout=20)
+        self._套接字路径 = 路径
+        self._调整套接字权限(路径)
+        logger.info(f"反向WS服务端启动：unix:{路径}，等待连接")
+        打印(f"反向WS服务端启动：unix:{路径}，等待连接")
+
+    def _调整套接字权限(self, 路径: str) -> None:
+        """把 socket 设成 0660，并按配置改属组。
+
+        umask 默认会给 0755，那等于本机谁都能连，socket 相对 TCP 的好处就没了。
+        """
+        try:
+            os.chmod(路径, 0o660)
+        except OSError as e:
+            logger.warning(f"设置套接字权限失败（将按 umask 的默认值继续）：{e}")
+
+        属组 = str(self._套接字属组 or "").strip()
+        if not 属组:
+            return
+        try:
+            import grp as _grp
+
+            os.chown(路径, -1, _grp.getgrnam(属组).gr_gid)
+        except KeyError:
+            logger.warning(f"套接字属组「{属组}」不存在，socket 仍属当前用户：{路径}")
+        except PermissionError:
+            logger.warning(
+                f"改套接字属组为「{属组}」被拒：当前用户不在该组内。"
+                f"先执行 `sudo usermod -aG {属组} <运行 Hermes 的用户>` 再重启：{路径}"
+            )
+        except OSError as e:
+            logger.warning(f"改套接字属组失败：{e}")
+
     async def 停止(self) -> None:
         """停止服务端并清理资源。"""
         if self._ws连接实例:
@@ -118,6 +197,15 @@ class WS:
         if self._服务端:
             self._服务端.close()
             await self._服务端.wait_closed()
+        if self._套接字路径:
+            # 留着死 socket 会让下次 bind 报 EADDRINUSE。
+            try:
+                os.unlink(self._套接字路径)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.debug(f"清理 socket 文件失败（不影响停止）：{e}")
+            self._套接字路径 = ""
 
     # ── 内部方法 ──────────────────────────────────────────────────────────
 

@@ -124,6 +124,86 @@ async def 主体():
     finally:
         await srv.停止()
 
+    print("\n⑥ 监听位置判定(Unix socket 也算本地)")
+    是本地 = sys.modules["napcat_plugin.ws"]._是本地监听
+    for addr, want in (("/dev/shm/napcat.sock", True), ("/run/napcat.sock", True),
+                       ("127.0.0.1", True), ("localhost", True),
+                       ("0.0.0.0", False), ("192.168.1.5", False)):
+        判定(f"_是本地监听({addr!r}) == {want}", 是本地(addr) is want)
+
+    print("\n⑦ Unix socket 模式:起服务、权限、认证、残留清理")
+    import os as _os
+    import socket as _socket
+    import stat as _stat
+    import tempfile as _tempfile
+
+    from websockets.asyncio.client import unix_connect
+
+    根 = Path(_tempfile.mkdtemp(prefix="napcat_uds_"))
+    sock路径 = str(根 / "napcat.sock")
+    收到的事件 = []
+
+    async def 收事件(数据):
+        收到的事件.append(数据)
+
+    # 无令牌也能起:本地监听不受「非回环必须带令牌」那条约束
+    服务 = WS(收事件, sock路径, 0, "")
+    await 服务.启动()
+    判定("socket 文件已创建", _os.path.exists(sock路径), sock路径)
+    权限位 = oct(_stat.S_IMODE(_os.stat(sock路径).st_mode))
+    判定("权限被显式收紧到 0660(不靠 umask)", 权限位 == "0o660", 权限位)
+
+    async with unix_connect(sock路径, additional_headers={"X-Self-ID": "80001"}) as 客户端:
+        await asyncio.sleep(0.4)
+        判定("客户端经 socket 连上并被采纳", 服务._ws连接实例 is not None)
+        判定("socket 模式下握手头 X-Self-ID 同样生效",
+            服务._对端SelfID == "80001", repr(服务._对端SelfID))
+    await asyncio.sleep(0.4)
+    判定("断开后置空,不留死引用", 服务._ws连接实例 is None)
+    await 服务.停止()
+    判定("停止后 socket 文件被删除", not _os.path.exists(sock路径))
+
+    # 残留的死 socket(上次没退干净)要能清掉并重新绑定
+    死socket = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    死socket.bind(sock路径)
+    死socket.close()
+    判定("(已造出一个残留 socket 文件)", _os.path.exists(sock路径))
+    服务2 = WS(收事件, sock路径, 0, "good-token")
+    await 服务2.启动()
+    判定("残留 socket 被清掉后能重新绑定", _os.path.exists(sock路径))
+    try:
+        async with unix_connect(sock路径, "ws://localhost/?access_token=good-token"):
+            await asyncio.sleep(0.4)
+            判定("socket 模式下令牌认证照常生效", 服务2._ws连接实例 is not None)
+    except Exception as e:
+        判定("socket 模式下令牌认证照常生效", False, f"{type(e).__name__}: {e}")
+    try:
+        async with unix_connect(sock路径, "ws://localhost/?access_token=坏的") as 坏客户端:
+            await asyncio.sleep(0.4)
+            await asyncio.wait_for(坏客户端.recv(), timeout=1)
+        判定("socket 模式下坏令牌被拒", False, "坏令牌居然保持连接")
+    except Exception as e:
+        判定("socket 模式下坏令牌被拒", True, type(e).__name__)
+    await 服务2.停止()
+
+    # 同名普通文件:拒绝启动,而不是删掉别人的东西
+    占位文件 = 根 / "占用"
+    占位文件.write_text("x")
+    服务3 = WS(收事件, str(占位文件), 0, "")
+    try:
+        await 服务3.启动()
+        await 服务3.停止()
+        判定("同名普通文件 → 拒绝启动(不删别人的文件)", False, "竟然启动了")
+    except ValueError as e:
+        判定("同名普通文件 → 拒绝启动(不删别人的文件)", True, str(e)[:38] + "…")
+    判定("那个文件还在", 占位文件.exists())
+
+    # 属组配置:给了不存在的组名只告警,不该拦住启动
+    服务4 = WS(收事件, sock路径, 0, "", "不存在的组名_xyz")
+    await 服务4.启动()
+    判定("属组名不存在时仍能启动(只告警)", _os.path.exists(sock路径))
+    await 服务4.停止()
+
     print("\n================ 汇总 ================")
     通过 = sum(1 for _, p in 结果 if p)
     print(f"{通过}/{len(结果)} 通过")

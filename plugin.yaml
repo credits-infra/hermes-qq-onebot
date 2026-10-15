@@ -51,14 +51,25 @@ config_schema:
   reverse_host:
     type: str
     default: 127.0.0.1
-    description: 反向 WS 监听地址。绑非回环地址时必须同时设置 access_token，否则拒绝启动。
+    description: >-
+      反向 WS 监听地址。绑非回环地址时必须同时设置 access_token，否则拒绝启动。
+      以 / 开头时按 Unix socket 路径处理（如 /dev/shm/napcat.sock），
+      访问控制交给文件属主与权限位，不再要求令牌。
   reverse_port:
     type: int
     default: 6700
-    description: 反向 WS 监听端口。
+    description: 反向 WS 监听端口；Unix socket 模式下不使用。
   access_token:
     type: secret
-    description: 反向 WS 访问令牌（别名 reverse_token）。强烈建议设置。
+    description: >-
+      反向 WS 访问令牌（别名 reverse_token）。强烈建议设置。
+      Unix socket 模式下不强制，但设上可以作为第二道门槛。
+  socket_group:
+    type: str
+    description: >-
+      仅 Unix socket 模式使用：把 socket 文件的属组改成该组（如 caddy），
+      让以别的用户身份运行的反向代理能连上。改属组失败只告警，不阻止启动；
+      前提是运行 Hermes 的用户已在该组里。
 
   # ── 触发行文 ──
   mention_patterns:

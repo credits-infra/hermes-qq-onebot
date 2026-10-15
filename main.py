@@ -80,6 +80,12 @@ class NapCat适配器(BasePlatformAdapter):
         if not isinstance(令牌值, str):
             raise ValueError(f"access_token 必须是字符串; 收到 {type(令牌值).__name__}: {令牌值!r}")
         self.反向监听令牌: str = 令牌值
+        # 仅 socket 模式用得上：把 socket 属组改到这个组，让以别的用户身份运行的反向
+        # 代理（如 caddy）能连上。
+        属组值 = 获取配置("socket_group", "")
+        if not isinstance(属组值, str):
+            raise ValueError(f"socket_group 必须是字符串; 收到 {type(属组值).__name__}: {属组值!r}")
+        self.套接字属组: str = 属组值
 
         # ── HTTP API（可选，推荐开启）──
         self.HTTP接口地址: str = 获取配置("http_api_url", "")
@@ -196,6 +202,7 @@ class NapCat适配器(BasePlatformAdapter):
             self.反向监听地址,
             self.反向监听端口,
             self.反向监听令牌,
+            self.套接字属组,
         )
         self._HTTP调用器: Optional[NapcatHttp] = None
         if self.HTTP接口地址:
@@ -220,7 +227,12 @@ class NapCat适配器(BasePlatformAdapter):
             msg2 = f"HTTP接口已启用: {self.HTTP接口地址}"
             logger.info(msg2)
             打印(msg2)
-        打印(f"配置: 监听地址={self.反向监听地址} 端口={self.反向监听端口} 令牌={'已设置' if self.反向监听令牌 else '未设置'}")
+        监听描述 = (
+            f"unix:{self.反向监听地址}（属组={self.套接字属组 or '当前用户'}）"
+            if str(self.反向监听地址).strip().startswith("/")
+            else f"{self.反向监听地址}:{self.反向监听端口}"
+        )
+        打印(f"配置: 监听={监听描述} 令牌={'已设置' if self.反向监听令牌 else '未设置'}")
         打印(f"配置: HTTP接口={'已启用' if self.HTTP接口地址 else '未启用'} 表情回应={'已启用' if self.启用表情回应 else '未启用'}")
         打印(f"配置: 机器人QQ号={self.机器人QQ号 or '未设置(自动学习)'} 合并转发阈值={self.合并转发阈值} 引用文本最大字数={self.引用文本最大字数}")
         if self.允许所有用户:
