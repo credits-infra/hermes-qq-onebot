@@ -178,6 +178,22 @@ def 主体():
     判定("工具端到端:发白名单内的群真的发了",
         len(假适配器.发送记录) == 1, str(假适配器.发送记录[:1]))
 
+    # auto_escape:声明了却没实现过(第二轮评审发现)—— 写 true 时应把 CQ 码转义成纯文本
+    假适配器.发送记录.clear()
+    asyncio.run(llm_tools._handle_send_message(
+        {"target_type": "group", "target_id": "111", "message": "[CQ:face,id=178]",
+         "auto_escape": True}))
+    发出 = 假适配器.发送记录[-1][-1] if 假适配器.发送记录 else ""
+    判定("auto_escape=true → 消息被转义成纯文本(没有真的 CQ 码)",
+        "&#91;CQ:face" in str(发出) and "[CQ:face,id=178]" not in str(发出), repr(发出)[:80])
+
+    假适配器.发送记录.clear()
+    asyncio.run(llm_tools._handle_send_message(
+        {"target_type": "group", "target_id": "111", "message": "[CQ:face,id=178]"}))
+    发出 = 假适配器.发送记录[-1][-1] if 假适配器.发送记录 else ""
+    判定("auto_escape 缺省/false → 照常当 CQ 码发",
+        "[CQ:face,id=178]" in str(发出), repr(发出)[:80])
+
     adapter模块._适配器实例 = None
 
     print("\n================ 汇总 ================")

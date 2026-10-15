@@ -16,6 +16,7 @@ from typing import Any, Optional
 from tools.registry import tool_error, tool_result
 
 from .security import 检查调用, 检查发信目标
+from .tools import 解析布尔值, 转义CQ值
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,12 @@ async def _handle_send_message(args: dict, **kw) -> str:
         return tool_error("target_id 不能为空")
     if not 消息内容:
         return tool_error("message 不能为空")
+
+    # auto_escape:把消息当纯文本发(不让接收端解析 CQ 码)。这个参数原来在 schema 里
+    # 声明了却完全没实现 —— 模型以为写 true 就能关掉解析,实际照样按 CQ 码发出去
+    # (第二轮交叉评审发现)。实现:复用 CQ 转义,接收端反转义后仍是原文,但不再是码。
+    if 解析布尔值(args.get("auto_escape")):
+        消息内容 = 转义CQ值(消息内容)
 
     # 出站目标也要过白名单:否则被允许的人(或提示注入)可以指挥机器人把消息发到
     # 白名单之外的任意群 / 任意 QQ 用户。
