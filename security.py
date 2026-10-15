@@ -245,13 +245,62 @@ def _检查目标参数(动作: str, 参数: dict) -> Optional[str]:
     return None
 
 
+# 直接把消息发出去的动作:它们的 message / messages 载荷是模型可控文本,
+# 必须跟回复正文一样过净化 —— 否则 README 承诺的「[CQ:file] 永不放过」在
+# napcat_call_action 这条路上不成立(第二轮交叉评审发现)。
+发消息动作 = frozenset({
+    "send_msg", "send_group_msg", "send_private_msg",
+    "send_group_forward_msg", "send_private_forward_msg",
+})
+
+
+def _消息载荷文本(值: Any) -> Iterable[str]:
+    """把载荷里所有字符串捞出来:字符串、段数组、合并转发节点数组都认。"""
+    if isinstance(值, str):
+        yield 值
+    elif isinstance(值, dict):
+        for 子 in 值.values():
+            yield from _消息载荷文本(子)
+    elif isinstance(值, (list, tuple)):
+        for 子 in 值:
+            yield from _消息载荷文本(子)
+
+
+def _检查消息载荷(动作: str, 参数: dict) -> Optional[str]:
+    """发消息类动作的载荷要过 CQ 净化;命中禁止项就**拒绝整个调用**。
+
+    为什么是拒绝而不是「剥掉后照发」:工具调用是模型显式发起的一次动作,静默改写
+    它的载荷会让模型以为发出去的就是自己写的内容;拒绝并把被拦的原因回给它,它才
+    能改写重试。(评审给的两条路里,由用户拍板选「拒绝并说明理由」。)
+    """
+    if 动作 not in 发消息动作:
+        return None
+    for 键 in ("message", "messages"):
+        if 键 not in 参数:
+            continue
+        for 文本 in _消息载荷文本(参数.get(键)):
+            if not 文本 or "[CQ:" not in 文本:
+                continue
+            _, 丢弃说明 = 净化CQ码(文本)
+            if 丢弃说明:
+                return (
+                    f"参数「{键}」里有被安全策略禁止的 CQ 码:{'; '.join(丢弃说明)} "
+                    f"请改写后重试;要发本机文件请走 MEDIA: 通道(那条受媒体白名单保护)。"
+                )
+    return None
+
+
 def 检查调用(动作: str, 参数: Any) -> Optional[str]:
     """动作 + 参数的整体检查。None=放行,否则返回拒绝说明。"""
     错误 = 检查动作(动作)
     if 错误:
         return 错误
+    名 = str(动作 or "").strip()
     if isinstance(参数, dict):
-        错误 = _检查目标参数(str(动作 or "").strip(), 参数)
+        错误 = _检查目标参数(名, 参数)
+        if 错误:
+            return 错误
+        错误 = _检查消息载荷(名, 参数)
         if 错误:
             return 错误
     for 键, 值 in 遍历参数里的路径(参数 or {}):

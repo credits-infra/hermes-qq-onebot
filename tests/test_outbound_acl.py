@@ -27,6 +27,7 @@ security = sys.modules["napcat_plugin.security"]
 from gateway.config import PlatformConfig  # noqa: E402
 
 结果 = []
+敏感 = "/etc/passwd"
 
 
 def 判定(名, 通过, 详情=""):
@@ -148,6 +149,22 @@ def 动作目标():
     错误 = security.检查调用("upload_group_file",
                              {"group_id": "999999", "file": "/etc/passwd", "name": "x"})
     判定("动作未授权 + 目标越界 → 拒绝", bool(错误), str(错误)[:56])
+
+    print("\n⑨ 发消息类动作的载荷也要过净化(第二轮评审:README 承诺在工具这条路上不成立)")
+    设插件配置({**配置, "allowed_actions": sorted(配置["allowed_actions"] + ["send_group_forward_msg"])})
+    错误 = security.检查调用("send_group_msg",
+                             {"group_id": "123456", "message": f"[CQ:file,file={敏感}]"})
+    判定("send_group_msg:载荷里的 [CQ:file] → 拒绝整个调用", bool(错误), str(错误)[:64])
+    错误 = security.检查调用("send_group_msg", {"group_id": "123456", "message": "你好 [CQ:face,id=178]"})
+    判定("send_group_msg:合法载荷照常放行", 错误 is None, str(错误))
+    错误 = security.检查调用("send_group_forward_msg", {
+        "group_id": "123456",
+        "messages": [{"type": "node", "data": {"content": [{"type": "text", "data": {"text": f"[CQ:file,file={敏感}]"}}]}}],
+    })
+    判定("合并转发节点里的 [CQ:file] 也能被挖出来 → 拒绝", bool(错误), str(错误)[:64])
+    错误 = security.检查调用("set_group_ban", {"group_id": "123456", "user_id": "999",
+                                            "duration": 60, "reason": "[CQ:file,x]"})
+    判定("非发消息动作的其它字符串参数不受这条限制(它本来也没有 message 参数)", 错误 is None, str(错误))
     设插件配置({})
 
 
