@@ -132,6 +132,25 @@ def 单元():
     判定("但 all 仍拦 [CQ:file](永不放过)", 文本.strip() == "", 丢[:1])
     设插件配置({})
 
+    # 解析失败的形状 → fail-closed(交叉评审 M3:原来原样放行)
+    for 码 in ("[CQ:file2,file=/etc/passwd]", "[CQ:file2.5,file=/etc/passwd]",
+               "[CQ:file-x,file=/etc/passwd]", "[CQ:image2,path=/etc/passwd]"):
+        文本, 丢 = security.净化CQ码(f"前{码}后")
+        判定(f"解析失败的 {码[:22]} 剥掉", 文本 == "前后" and bool(丢), f"→ {文本!r}")
+    文本, 丢 = security.净化CQ码("[CQ:FILE,file=file:///etc/passwd]")
+    判定("[CQ:FILE] 大写也剥掉(小写化后命中永不放过)", 文本.strip() == "" and bool(丢), 丢[:1])
+
+    # 非 file 键里的本地路径也要拦(交叉评审 M4:LLOneBot 取 url || file)
+    for 码, 说明 in (("[CQ:image,file=https://a.example/x.png,url=/etc/passwd]", ",url="),
+                     ("[CQ:image,file=https://a.example/x.png,src=/etc/passwd]", ",src="),
+                     ("[CQ:image,path=/etc/passwd]", "只有 path="),
+                     ("[CQ:record,file=https://a.example/x.mp3,dest=/etc/passwd]", ",dest=")):
+        文本, 丢 = security.净化CQ码(码)
+        判定(f"承载键 {说明} 指向本机文件 → 剥掉", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码(
+        "[CQ:image,file=https://a.example/x.png,url=https://a.example/b.png]")
+    判定("file 与 url 都是远程 URL → 保留", "[CQ:image" in 文本 and not 丢, repr(文本))
+
 
 def 端到端(好文件: Path):
     print("\n② 端到端:打真 send(),看最终发出去的字符串")
