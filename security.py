@@ -77,9 +77,11 @@ logger = logging.getLogger(__name__)
 })
 
 # 参数里可能承载本地路径的键名(小写比较)。
+# `url` 也在内:OneBot 的 upload_group_file_by_url / download_file 就是靠它,
+# 而 `file:///本机文件` 形式的 url 同样能读本机文件(交叉评审 L 项)。
 路径参数键 = frozenset({
     "file", "path", "file_path", "filepath", "image", "record", "video",
-    "cover", "dest", "target_path", "local_path",
+    "cover", "dest", "target_path", "local_path", "url", "src",
 })
 
 
@@ -361,14 +363,20 @@ def 净化CQ码(文本: str) -> tuple[str, list[str]]:
             return ""
 
         if 类型 in 需校验路径的CQ类型:
-            文件 = 参数.get("file", "")
-            if not 文件:
-                丢弃.append(f"[CQ:{类型}] 缺少 file 参数")
+            # 所有可能承载路径的键都得查,不能只看 file:LLOneBot 发送取
+            # `url || file`(outgoing.ts:330),于是
+            # `[CQ:image,file=https://x/a.png,url=/本机文件]` 里真正会被上传的是
+            # url —— 旧代码只看了 file(一个远程 URL,白名单直接放过)就放行
+            # (交叉评审 M4)。判不了来路的,宁可剥掉。
+            承载 = [(键, 值) for 键, 值 in 参数.items() if 键 in 路径参数键]
+            if not 承载:
+                丢弃.append(f"[CQ:{类型}] 没有承载路径的参数,判不出来路")
                 return ""
-            错误 = 校验本地路径(文件)
-            if 错误:
-                丢弃.append(f"[CQ:{类型}] {错误}")
-                return ""
+            for 键, 值 in 承载:
+                错误 = 校验本地路径(值)
+                if 错误:
+                    丢弃.append(f"[CQ:{类型}] 参数「{键}」{错误}")
+                    return ""
 
         return 匹配.group()
 
