@@ -500,14 +500,18 @@ class NapCat适配器(BasePlatformAdapter):
         预报大小 = 数据.get("file_size", "")
         大小限制 = self._获取下载限制(段类型)
 
-        if not 预报大小:
-            logger.info(f"{段类型} 无 file_size，跳过下载")
-            return None, "application/octet-stream"
-
-        try:
-            文件大小 = int(预报大小)
-        except (ValueError, TypeError):
-            文件大小 = 0
+        文件大小 = 0
+        if 预报大小:
+            try:
+                文件大小 = int(预报大小)
+            except (ValueError, TypeError):
+                文件大小 = 0
+        else:
+            # 不是所有实现都带 file_size(LLOneBot/LuckyLilliaBot 带,别的可能不带)。没有
+            # 预报值不该直接放弃 —— 下载函数本身有「HEAD 预检 + 边下边查」两道大小闸门,
+            # 拿配置上限兜底是安全的。原实现这里直接 return None,于是那些实现上的
+            # 图片/语音**永远到不了模型**,日志里只有一句「跳过下载」。
+            logger.info(f"{段类型} 未给 file_size，按配置上限 {大小限制} 字节尝试下载")
 
         if 文件大小 and 文件大小 > 大小限制:
             logger.info(f"{段类型} 文件太大 ({文件大小} > {大小限制} bytes)，跳过下载")
