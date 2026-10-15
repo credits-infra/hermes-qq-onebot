@@ -767,7 +767,7 @@ class NapCat适配器(BasePlatformAdapter):
             return SendResult(success=False, error="客户端未初始化")
 
         回复目标 = kwargs.get("reply_to")
-        回复CQ前缀 = f"[CQ:reply,id={回复目标}]" if 回复目标 else ""
+        回复CQ前缀 = f"[CQ:reply,id={转义CQ值(回复目标)}]" if 回复目标 else ""
         logger.info(f"▶ 发送: 会话={chat_id} 长度={len(content)} 预览={content[:20] if content else '非文本'}")
 
         内容 = content.strip()
@@ -1041,7 +1041,7 @@ class NapCat适配器(BasePlatformAdapter):
             if 丢弃说明:
                 logger.warning(f"图片说明中被安全策略剥掉: {'; '.join(丢弃说明)}")
             CQ文本 = caption
-        CQ文本 += f"[CQ:image,file={image_url}]"
+        CQ文本 += f"[CQ:image,file={转义CQ值(image_url)}]"
 
         消息类型, 目标ID = self._解析投递目标(chat_id)
         if 消息类型 is None:
@@ -1069,8 +1069,8 @@ class NapCat适配器(BasePlatformAdapter):
         回复目标 = kwargs.get("reply_to")
         CQ文本 = ""
         if 回复目标:
-            CQ文本 = f"[CQ:reply,id={回复目标}]"
-        CQ文本 += f"[CQ:image,file=file:///{image_path.lstrip('/')}]"
+            CQ文本 = f"[CQ:reply,id={转义CQ值(回复目标)}]"
+        CQ文本 += f"[CQ:image,file=file:///{转义CQ值(image_path.lstrip('/'))}]"
 
         消息类型, 目标ID = self._解析投递目标(chat_id)
         if 消息类型 is None:
@@ -1141,8 +1141,8 @@ class NapCat适配器(BasePlatformAdapter):
 
         CQ文本 = ""
         if reply_to:
-            CQ文本 = f"[CQ:reply,id={reply_to}]"
-        CQ文本 += f"[CQ:record,file=file:///{audio_path.lstrip('/')}]"
+            CQ文本 = f"[CQ:reply,id={转义CQ值(reply_to)}]"
+        CQ文本 += f"[CQ:record,file=file:///{转义CQ值(audio_path.lstrip('/'))}]"
 
         消息类型, 目标ID = self._解析投递目标(chat_id)
         if 消息类型 is None:

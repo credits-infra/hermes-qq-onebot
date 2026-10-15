@@ -435,11 +435,11 @@ def 文本转CQ码字符串(文本: str, 附件列表: Optional[List[dict]] = No
             continue
         扩展名 = 路径.rsplit(".", 1)[-1].lower() if "." in 路径 else ""
         if 扩展名 in ("png", "jpg", "jpeg", "gif", "webp"):
-            部分.append(f"[CQ:image,file=file:///{路径.lstrip('/')}]")
+            部分.append(f"[CQ:image,file=file:///{转义CQ值(路径.lstrip('/'))}]")
         elif 扩展名 in ("ogg", "mp3", "wav", "amr", "silk"):
-            部分.append(f"[CQ:record,file=file:///{路径.lstrip('/')}]")
+            部分.append(f"[CQ:record,file=file:///{转义CQ值(路径.lstrip('/'))}]")
         else:
-            部分.append(f"[CQ:file,file=file:///{路径.lstrip('/')}]")
+            部分.append(f"[CQ:file,file=file:///{转义CQ值(路径.lstrip('/'))}]")
     return "".join(部分)
 
 
