@@ -340,7 +340,12 @@ def 净化CQ码(文本: str) -> tuple[str, list[str]]:
     def _替换(匹配: "re.Match[str]") -> str:
         解析 = 解析CQ码(匹配.group())
         if 解析 is None:
-            return 匹配.group()
+            # fail-closed:判不出来的 CQ 形状一律剥掉。原实现原样放行,于是
+            # `[CQ:file2,file=/本机文件]` 这类「净化判不出来、接收端却可能按 file
+            # 语义处理」的码直接出站(交叉评审 M3)。宁可少发一段文本,也不留一条
+            # 判不了的出站路径 —— 判不出来的东西,没资格被信任。
+            丢弃.append(f"{匹配.group()[:48]} 解析失败,按不可信内容剥掉")
+            return ""
         类型, 原始参数 = 解析
         # 参数名大小写不敏感(原实现统一转小写);值已由 解析CQ码 反转义
         参数 = {键.lower(): 值 for 键, 值 in 原始参数.items()}
