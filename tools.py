@@ -42,6 +42,9 @@ __all__ = [
     # CQ 码工具
     "文本转CQ码字符串",
     "拆分CQ码与纯文本",
+    "反转义CQ值",
+    "解析CQ码",
+    "规范化消息段",
     "拆分长文本",
 
     # 消息解析（接收方向）
@@ -453,6 +456,72 @@ def 拆分CQ码与纯文本(内容: str) -> List[tuple]:
     if 尾文本.strip():
         片段.append(("text", 尾文本))
     return 片段
+
+
+# CQ 参数里的转义(OneBot 规定)
+_CQ转义表 = (("&#44;", ","), ("&#91;", "["), ("&#93;", "]"), ("&amp;", "&"))
+_CQ码完整正则 = re.compile(r"\[CQ:([A-Za-z_]+)((?:,[^\]]*)?)\]")
+
+
+def 反转义CQ值(值: str) -> str:
+    """还原 CQ 参数里的转义(逗号 / 方括号 / 与号)。
+
+    逗号在 CQ 参数里被转义成 ``&#44;``,所以解析参数必须先按逗号切、再反转义 ——
+    反过来会把参数值里的逗号当成分隔符切开。
+    """
+    结果 = str(值 if 值 is not None else "")
+    for 原, 新 in _CQ转义表:
+        结果 = 结果.replace(原, 新)
+    return 结果
+
+
+def 解析CQ码(片段: str) -> Optional[tuple]:
+    """把单个 ``[CQ:type,k=v,...]`` 解析成 ``(小写类型, 参数字典)``;不是 CQ 码返回 None。"""
+    匹配 = _CQ码完整正则.fullmatch(str(片段 or "").strip())
+    if not 匹配:
+        return None
+    参数: dict = {}
+    for 项 in 匹配.group(2).lstrip(",").split(","):
+        if not 项:
+            continue
+        键, _, 值 = 项.partition("=")
+        if 键.strip():
+            参数[键.strip()] = 反转义CQ值(值)
+    return 匹配.group(1).lower(), 参数
+
+
+def 规范化消息段(原始值: Any) -> List[dict]:
+    """把事件的 ``message`` 字段统一成段数组 ``[{"type":..., "data":{...}}]``。
+
+    OneBot 允许两种上报格式:``message`` 是段数组,或者当 ``message_format=string`` 时
+    是 CQ 码字符串。LLOneBot/LuckyLilliaBot 的 ``messageFormat`` 可配成 ``'string'``
+    (见 src/onebot11/connect/ws.ts),NapCat 也有同类开关 —— 只认数组的话,字符串格式下
+    **整条消息内容会被当空丢掉,而且悄无声息**(原实现是「不是 list 就置空列表」)。
+    """
+    if isinstance(原始值, list):
+        return [段 for 段 in 原始值 if isinstance(段, dict)]
+    if not isinstance(原始值, str) or not 原始值:
+        return []
+
+    段列表: List[dict] = []
+    位置 = 0
+    for 匹配 in CQ码正则.finditer(原始值):
+        if 匹配.start() > 位置:
+            文本 = 原始值[位置:匹配.start()]
+            if 文本:
+                段列表.append({"type": "text", "data": {"text": 文本}})
+        解析 = 解析CQ码(匹配.group())
+        if 解析 is None:
+            段列表.append({"type": "text", "data": {"text": 匹配.group()}})
+        else:
+            类型, 参数 = 解析
+            段列表.append({"type": 类型, "data": 参数})
+        位置 = 匹配.end()
+    if 位置 < len(原始值):
+        尾 = 原始值[位置:]
+        if 尾:
+            段列表.append({"type": "text", "data": {"text": 尾}})
+    return 段列表
 
 
 def 拆分长文本(文本: str, 最大长度: int = 1500) -> List[str]:

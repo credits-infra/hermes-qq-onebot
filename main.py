@@ -288,9 +288,12 @@ class NapCat适配器(BasePlatformAdapter):
         群ID = str(原始数据.get("group_id", "")) if 消息类型 == "group" else ""
         发送者 = 原始数据.get("sender", {})
         昵称 = 发送者.get("card", "") or 发送者.get("nickname", "") or 用户ID
-        消息段列表 = 原始数据.get("message", [])
-        if not isinstance(消息段列表, list):
-            消息段列表 = []
+        # message 可能是段数组,也可能是 CQ 码字符串(message_format=string;LLOneBot 的
+        # messageFormat 可配成 'string')。统一成段数组 —— 只认数组的话,字符串格式下
+        # 整条消息会被当空丢掉,而且不留痕。raw_message 作兜底。
+        消息段列表 = 规范化消息段(原始数据.get("message"))
+        if not 消息段列表:
+            消息段列表 = 规范化消息段(原始数据.get("raw_message"))
 
         logger.info(f"▶ 收到{'群聊' if 消息类型 == 'group' else '私聊'}: 用户={昵称}({用户ID}) 群={群ID or '-'} 消息ID={消息ID}")
 
@@ -579,8 +582,10 @@ class NapCat适配器(BasePlatformAdapter):
         try:
             被回复消息 = await self.ws.获取消息(被回复ID)
             if 被回复消息.get("status") == "ok":
-                原始段列表 = 被回复消息.get("data", {}).get("message", [])
-                if isinstance(原始段列表, list):
+                原始段列表 = 规范化消息段(被回复消息.get("data", {}).get("message"))
+                if not 原始段列表:
+                    原始段列表 = 规范化消息段(被回复消息.get("data", {}).get("raw_message"))
+                if 原始段列表:
                     回复媒体映射 = await self._解析媒体附件(原始段列表)
                     回复文本 = 构建完整可读文本(原始段列表, 回复媒体映射)
                     # 截断引用文本（保留完整媒体标签）

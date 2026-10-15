@@ -22,6 +22,9 @@ import re
 from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
+# tools 不 import 本模块,所以这里不存在循环导入
+from .tools import 解析CQ码
+
 logger = logging.getLogger(__name__)
 
 
@@ -285,23 +288,9 @@ def 检查发信目标(目标类型: str, 目标ID: str) -> Optional[str]:
 永不放过的CQ类型 = frozenset({"file", "onlinefile", "flash"})
 需校验路径的CQ类型 = frozenset({"image", "record", "video"})
 
-CQ码正则 = re.compile(r"\[CQ:([A-Za-z_]+)((?:,[^\]]*)?)\]")
-_CQ参数正则 = re.compile(r"([A-Za-z_]+)=([^,\]]*)")
-_CQ转义表 = (("&#44;", ","), ("&#91;", "["), ("&#93;", "]"), ("&amp;", "&"))
-
-
-def _反转义CQ值(值: str) -> str:
-    结果 = 值
-    for 原, 新 in _CQ转义表:
-        结果 = 结果.replace(原, 新)
-    return 结果
-
-
-def _CQ参数(原始参数: str) -> dict[str, str]:
-    参数: dict[str, str] = {}
-    for 匹配 in _CQ参数正则.finditer(原始参数 or ""):
-        参数[匹配.group(1).lower()] = _反转义CQ值(匹配.group(2))
-    return 参数
+# 只用来「找出」CQ 码;解析(含参数反转义)交给 tools.解析CQ码 ——
+# 收发两个方向共用同一套解析,免得两处逻辑各自漂移。
+CQ码正则 = re.compile(r"\[CQ:[^\]]+\]")
 
 
 def 解析CQ类型策略(原始: Any) -> tuple[frozenset, bool]:
@@ -349,15 +338,18 @@ def 净化CQ码(文本: str) -> tuple[str, list[str]]:
     丢弃: list[str] = []
 
     def _替换(匹配: "re.Match[str]") -> str:
-        类型 = 匹配.group(1).lower()
+        解析 = 解析CQ码(匹配.group())
+        if 解析 is None:
+            return 匹配.group()
+        类型, 原始参数 = 解析
+        # 参数名大小写不敏感(原实现统一转小写);值已由 解析CQ码 反转义
+        参数 = {键.lower(): 值 for 键, 值 in 原始参数.items()}
         if 类型 in 永不放过的CQ类型:
             丢弃.append(f"[CQ:{类型}] 会按路径读取服务器文件并发出,不放行")
             return ""
         if not 全放 and 类型 not in 允许集:
             丢弃.append(f"[CQ:{类型}] 不在允许的 CQ 类型内")
             return ""
-
-        参数 = _CQ参数(匹配.group(2))
 
         if 类型 == "at" and 参数.get("qq", "").strip().lower() == "all" and not 允许全体:
             丢弃.append("[CQ:at,qq=all] 是 @全体成员,默认不放行(要放开设 allow_at_all: true)")
