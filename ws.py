@@ -36,6 +36,23 @@ def _是回环地址(地址: str) -> bool:
         return False
 
 
+# 实现「我没有这个动作」的几种说法。LLOneBot/LuckyLilliaBot 对未实现的动作返
+# retcode 1404 + "<action> API 不存在"(src/onebot11/connect/ws.ts 的 handleAction);
+# go-cqhttp / NapCat 措辞类似。认出来才能优雅降级,而不是每次失败刷一行日志。
+_不支持关键词 = ("api 不存在", "不支持的", "不支持该", "未实现", "unsupported",
+               "not implemented", "not support", "no such api")
+
+
+def _是不支持(结果: dict) -> bool:
+    """实现是否明确表示「没有这个动作」。"""
+    if not isinstance(结果, dict):
+        return False
+    if 结果.get("retcode") == 1404:
+        return True
+    文本 = " ".join(str(结果.get(键, "")) for 键 in ("msg", "message", "wording")).lower()
+    return any(词 in 文本 for 词 in _不支持关键词)
+
+
 class WS:
     """反向 WebSocket 服务端（OneBot v11），配置在初始化时传入，启动时直接监听。"""
 
@@ -62,6 +79,8 @@ class WS:
         self._待响应映射表: dict[str, asyncio.Future] = {}
         self._自增计数器: int = 0
         self._服务端 = None  # asyncio 服务器对象，由启动() 创建
+        # 能力探测:被实现明确拒绝(1404 / "API 不存在")的扩展动作记在这里,之后不再重试。
+        self._不支持的动作: set[str] = set()
 
     async def 启动(self) -> None:
         """启动反向 WS 服务端（使用 __init__ 中保存的配置）。"""
@@ -264,12 +283,47 @@ class WS:
             "messages": 消息节点列表,
         })
 
+    def _记不支持(self, 动作: str, 结果: dict, 功能名: str) -> bool:
+        """首次发现某动作为「不支持」时记下来并提示一次。返回是否属于这种情况。"""
+        if not _是不支持(结果):
+            return False
+        if 动作 not in self._不支持的动作:
+            self._不支持的动作.add(动作)
+            logger.warning(f"当前 OneBot 实现不支持「{动作}」，已停用{功能名}（不再重试）")
+            打印(f"注意：当前实现不支持「{动作}」，已停用{功能名}")
+        return True
+
     async def 设置表情回应(self, 消息ID: str, 表情ID: int = 12) -> dict:
-        return await self.调用API("set_msg_emoji_like", {
+        """给消息加表情回应。
+
+        `set_msg_emoji_like` 是 NapCat/Lagrange/LLOneBot 的扩展动作,不是 OneBot v11
+        标准;实现没有它时返回「已跳过」而不是失败 —— 上层每次失败都打 warning,那样
+        每条消息都会刷一行日志,而功能本来就不存在。
+        """
+        if "set_msg_emoji_like" in self._不支持的动作:
+            return {"status": "skipped", "retcode": 0, "msg": "表情回应：实现不支持，已停用"}
+        结果 = await self.调用API("set_msg_emoji_like", {
             "message_id": int(消息ID),
             "emoji_id": 表情ID,
             "set": True,
         })
+        if self._记不支持("set_msg_emoji_like", 结果, "表情回应"):
+            return {"status": "skipped", "retcode": 0, "msg": "表情回应：实现不支持，已停用"}
+        return 结果
 
     async def 戳一戳好友(self, 用户ID: str) -> dict:
-        return await self.调用API("friend_poke", {"user_id": int(用户ID)})
+        """戳一戳好友。
+
+        标准动作是 `send_poke`;go-cqhttp 系实现常用 `friend_poke`(NapCat/LLOneBot 两个
+        都有)。先试标准的,被拒再试专有的;都试完仍不支持就记下来停用。
+        """
+        候选 = [动作 for 动作 in ("send_poke", "friend_poke")
+                if 动作 not in self._不支持的动作]
+        if not 候选:
+            return {"status": "skipped", "retcode": 0, "msg": "戳一戳：实现不支持，已停用"}
+
+        for 动作 in 候选:
+            结果 = await self.调用API(动作, {"user_id": int(用户ID)})
+            if not self._记不支持(动作, 结果, "戳一戳"):
+                return 结果
+        return {"status": "skipped", "retcode": 0, "msg": "戳一戳：实现不支持，已停用"}

@@ -663,7 +663,8 @@ class NapCat适配器(BasePlatformAdapter):
         """后台执行表情回应。"""
         try:
             结果 = await self.ws.设置表情回应(消息ID, 表情ID)
-            if 结果.get("status") != "ok":
+            # skipped = 当前实现没有这个扩展动作,已经提示过一次,这里不该再刷日志
+            if 结果.get("status") not in ("ok", "skipped"):
                 logger.warning(f"表情回应失败: {结果}")
         except Exception as e:
             logger.warning(f"表情回应异常: {e}")
@@ -672,7 +673,7 @@ class NapCat适配器(BasePlatformAdapter):
         """后台执行戳一戳。"""
         try:
             结果 = await self.ws.戳一戳好友(用户ID)
-            if 结果.get("status") != "ok":
+            if 结果.get("status") not in ("ok", "skipped"):
                 logger.warning(f"戳一戳失败: {结果}")
         except Exception as e:
             logger.warning(f"戳一戳异常: {e}")
