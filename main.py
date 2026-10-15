@@ -701,6 +701,31 @@ class NapCat适配器(BasePlatformAdapter):
     # 投递目标解析（发送链路辅助）
     # ═══════════════════════════════════════════════════════════════════════════════
 
+    def _目标在白名单内(self, 消息类型: str, 目标ID: str) -> Optional[str]:
+        """出站目标是否被允许。None=放行,否则返回拒绝说明。
+
+        为什么核心发送也要这道门:入站白名单只决定「谁能让机器人干活」。没有它,
+        被允许的人(或提示注入)可以指挥机器人把消息发到白名单之外的群 / QQ 用户,
+        把它当成一台发射机 —— 而核心 send()/send_image()/send_document() 原来完全
+        没有这道校验,只有 napcat_send_message 工具层查了(交叉评审 M2)。
+
+        名单来源就是适配器自己那份(与入站同一套),不另造第二个事实来源;
+        「允许所有群 / 允许所有用户」照旧生效,所以不会出现「收得进、回不出」。
+        """
+        if 消息类型 == "group":
+            if self.允许所有群 or 目标ID in self.允许的群集合:
+                return None
+            return (
+                f"群「{目标ID}」不在群白名单(allowed_group_ids)内,拒绝发送。"
+                f"这是运维的设置,不是权限故障。"
+            )
+        if self.允许所有用户 or 目标ID in self.允许的用户集合:
+            return None
+        return (
+            f"QQ「{目标ID}」不在用户白名单(allowed_qq_ids)内,拒绝发送。"
+            f"这是运维的设置,不是权限故障。"
+        )
+
     def _解析投递目标(self, 会话ID: str) -> tuple[Optional[str], str]:
         """根据会话ID解析出 (消息类型, 目标ID)。
 
@@ -717,6 +742,10 @@ class NapCat适配器(BasePlatformAdapter):
         目标ID = 投递信息.get("目标ID", "")
 
         if 目标ID and 消息类型:
+            拒绝 = self._目标在白名单内(消息类型, str(目标ID))
+            if 拒绝:
+                logger.warning(f"✗ 出站目标被白名单拦下: {拒绝}")
+                return None, 拒绝
             return 消息类型, str(目标ID)
 
         # 解析格式
@@ -748,6 +777,11 @@ class NapCat适配器(BasePlatformAdapter):
 
         if not 目标ID:
             return None, f"会话ID中目标ID为空「{会话ID}」"
+
+        拒绝 = self._目标在白名单内(消息类型, str(目标ID))
+        if 拒绝:
+            logger.warning(f"✗ 出站目标被白名单拦下: {拒绝}")
+            return None, 拒绝
 
         return 消息类型, str(目标ID)
 

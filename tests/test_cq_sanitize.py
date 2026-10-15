@@ -68,9 +68,14 @@ class 假WS:
 
 
 def 造适配器(extra=None):
+    """默认给本例用到的群 123456 开白名单。
+
+    本测试考的是 CQ 净化,不是出站 ACL;空名单时核心发送会 fail-closed(见
+    test_outbound_acl.py),那样这里根本发不出东西、断言的就不是净化了。
+    """
     from gateway.config import PlatformConfig
 
-    cfg = PlatformConfig(enabled=True, extra=extra or {})
+    cfg = PlatformConfig(enabled=True, extra=extra or {"allowed_group_ids": ["123456"]})
     a = adapter模块._创建适配器(cfg)
     a.ws = 假WS()
     return a
