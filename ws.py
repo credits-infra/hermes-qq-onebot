@@ -172,6 +172,12 @@ class WS:
 
         属组 = str(self._套接字属组 or "").strip()
         if not 属组:
+            # 没配属组时 socket 只归当前用户。socket 模式下这通常意味着反向代理连不上，
+            # 而表现只是「反代 502、插件这边一切正常」，很难查，所以要主动提示。
+            logger.warning(
+                "socket 模式下未设置 socket_group：socket 属组为当前用户（权限 0660）。"
+                f"如果反向代理以别的用户运行（如 caddy），它连不上这个 socket：{路径}"
+            )
             return
         try:
             import grp as _grp

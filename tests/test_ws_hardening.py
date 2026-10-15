@@ -204,6 +204,29 @@ async def 主体():
     判定("属组名不存在时仍能启动(只告警)", _os.path.exists(sock路径))
     await 服务4.停止()
 
+    # 没配 socket_group 也要提示:否则现场表现只是「反代连不上,插件一切正常」,很难查
+    import logging as _logging
+
+    捕获日志 = []
+
+    class _捕获器(_logging.Handler):
+        def emit(self, record):
+            捕获日志.append(record.getMessage())
+
+    日志器 = _logging.getLogger("napcat_plugin.ws")
+    日志器.addHandler(_捕获器())
+    try:
+        服务5 = WS(收事件, sock路径, 0, "")
+        await 服务5.启动()
+        await 服务5.停止()
+    finally:
+        日志器.handlers = [h for h in 日志器.handlers if not isinstance(h, _捕获器)]
+    判定(
+        "未配 socket_group 时给出提示(文档承诺的那条告警)",
+        any("socket_group" in 消息 for 消息 in 捕获日志),
+        捕获日志[0][:60] if 捕获日志 else "没抓到任何日志",
+    )
+
     print("\n================ 汇总 ================")
     通过 = sum(1 for _, p in 结果 if p)
     print(f"{通过}/{len(结果)} 通过")
