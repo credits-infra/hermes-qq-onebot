@@ -140,7 +140,20 @@ class WS:
                 except Exception:
                     提取的令牌 = ""
 
-            if not hmac.compare_digest(提取的令牌, self._访问令牌):
+            # 按字节比较,且用 surrogateescape:HTTP 头里的非 ASCII 字节会被 websockets 以
+            # surrogateescape 解出来(实测:含代理字符),直接 encode("utf-8") 会抛
+            # UnicodeEncodeError —— 而这段不在 try 里,连接就会带着 traceback 断开,日志被
+            # 噪音污染,任何人都能发非 ASCII 令牌来刷。surrogateescape 把代理字符还原成原始
+            # 字节,常数时间比较语义不变,任意字节序列都能正常判「不匹配」走干净路径。
+            try:
+                令牌匹配 = hmac.compare_digest(
+                    提取的令牌.encode("utf-8", "surrogateescape"),
+                    self._访问令牌.encode("utf-8", "surrogateescape"),
+                )
+            except (UnicodeError, TypeError, ValueError):
+                令牌匹配 = False
+
+            if not 令牌匹配:
                 logger.warning(f"反向WS认证失败，拒绝连接：{ws连接.remote_address}")
                 打印(f"反向WS认证失败，拒绝连接：{ws连接.remote_address}")
                 await ws连接.close(1008, "认证失败")
