@@ -221,23 +221,23 @@ def 校验本地路径(路径: str) -> Optional[str]:
     return None
 
 
-def 遍历参数里的路径(参数: Any, 前缀: str = "") -> Iterable[tuple[str, str]]:
-    """递归找出参数里所有像路径的字符串。"""
-    if not isinstance(参数, dict):
+def 遍历参数里的路径(参数: Any, 前缀: str = "", 键名: str = "") -> Iterable[tuple[str, str]]:
+    """递归找出参数里所有像路径的字符串(字典、列表、列表套列表一律往里走)。
+
+    原实现只递归 dict,列表里也只认 dict 子项 —— 列表套列表时整段漏检
+    (第二轮交叉评审发现)。这里改成统一递归,并让「键名」跟着上下文往下传,
+    列表里的字符串也能按它所属的键名判断。
+    """
+    if isinstance(参数, str):
+        if 键名.lower() in 路径参数键:
+            yield (前缀.rstrip(".") or 键名), 参数
         return
-    for 键, 值 in 参数.items():
-        全名 = f"{前缀}{键}"
-        if isinstance(值, str):
-            if str(键).lower() in 路径参数键:
-                yield 全名, 值
-        elif isinstance(值, dict):
-            yield from 遍历参数里的路径(值, f"{全名}.")
-        elif isinstance(值, (list, tuple)):
-            for 序号, 子项 in enumerate(值):
-                if isinstance(子项, str) and str(键).lower() in 路径参数键:
-                    yield f"{全名}[{序号}]", 子项
-                elif isinstance(子项, dict):
-                    yield from 遍历参数里的路径(子项, f"{全名}[{序号}].")
+    if isinstance(参数, dict):
+        for 键, 值 in 参数.items():
+            yield from 遍历参数里的路径(值, f"{前缀}{键}.", str(键))
+    elif isinstance(参数, (list, tuple)):
+        for 序号, 子项 in enumerate(参数):
+            yield from 遍历参数里的路径(子项, f"{前缀.rstrip('.')}[{序号}].", 键名)
 
 
 def _检查目标参数(动作: str, 参数: dict) -> Optional[str]:
