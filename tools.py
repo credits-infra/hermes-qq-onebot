@@ -418,7 +418,7 @@ def 构建消息段数组(
 # CQ 码工具
 # ══════════════════════════════════════════════════════════════════════════
 
-CQ码正则 = re.compile(r'\[CQ:[^]]+]')
+CQ码正则 = re.compile(r'\[CQ:[^]]+]', re.IGNORECASE)
 
 
 def 文本转CQ码字符串(文本: str, 附件列表: Optional[List[dict]] = None) -> str:
@@ -461,7 +461,7 @@ def 拆分CQ码与纯文本(内容: str) -> List[tuple]:
 
 # CQ 参数里的转义(OneBot 规定)
 _CQ转义表 = (("&#44;", ","), ("&#91;", "["), ("&#93;", "]"), ("&amp;", "&"))
-_CQ码完整正则 = re.compile(r"\[CQ:([A-Za-z_][A-Za-z0-9_]*)((?:,[^\]]*)?)\]")
+_CQ码完整正则 = re.compile(r"\[CQ:([A-Za-z_][A-Za-z0-9_]*)((?:,[^\]]*)?)\]", re.IGNORECASE)
 
 
 def 反转义CQ值(值: str) -> str:

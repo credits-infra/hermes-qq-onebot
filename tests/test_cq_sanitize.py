@@ -138,6 +138,14 @@ def 单元():
     判定("all 下正常 face 照常放行", "[CQ:face" in 文本 and not 丢)
     设插件配置({})
 
+    # CQ 前缀大小写不敏感(第二轮评审:[cq:...] 原来溜过去)
+    文本, 丢 = security.净化CQ码("[cq:file,file=/etc/passwd]")
+    判定("[cq:file] 小写前缀也剥掉", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[Cq:FILE,file=file:///etc/passwd]")
+    判定("混合大小写也剥掉", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[cq:face,id=178]")
+    判定("[cq:face] 正常码照常放行", "[cq:face" in 文本 and not 丢)
+
     # 解析失败的形状 → fail-closed(交叉评审 M3:原来原样放行)
     for 码 in ("[CQ:file2,file=/etc/passwd]", "[CQ:file2.5,file=/etc/passwd]",
                "[CQ:file-x,file=/etc/passwd]", "[CQ:image2,path=/etc/passwd]"):

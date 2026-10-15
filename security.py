@@ -279,7 +279,7 @@ def _检查消息载荷(动作: str, 参数: dict) -> Optional[str]:
         if 键 not in 参数:
             continue
         for 文本 in _消息载荷文本(参数.get(键)):
-            if not 文本 or "[CQ:" not in 文本:
+            if not 文本 or "cq:" not in 文本.lower():
                 continue
             _, 丢弃说明 = 净化CQ码(文本)
             if 丢弃说明:
@@ -368,7 +368,8 @@ def 检查发信目标(目标类型: str, 目标ID: str) -> Optional[str]:
 
 # 只用来「找出」CQ 码;解析(含参数反转义)交给 tools.解析CQ码 ——
 # 收发两个方向共用同一套解析,免得两处逻辑各自漂移。
-CQ码正则 = re.compile(r"\[CQ:[^\]]+\]")
+# 大小写不敏感:[cq:file,...] 这种写法同样要被抓到(第二轮评审发现小写前缀能溜过去)。
+CQ码正则 = re.compile(r"\[CQ:[^\]]+\]", re.IGNORECASE)
 
 
 def 解析CQ类型策略(原始: Any) -> tuple[frozenset, bool]:
@@ -408,7 +409,7 @@ def 净化CQ码(文本: str) -> tuple[str, list[str]]:
     选择「剥掉」而不是「转义成纯文本」:目的是让它发不出去,同时日志里留下痕迹
     (转义会让攻击者看到自己拼的码原样显示,也给不出安全日志)。
     """
-    if not 文本 or "[CQ:" not in 文本:
+    if not 文本 or "cq:" not in 文本.lower():
         return 文本, []
 
     允许集, 全放 = 当前CQ类型策略()
