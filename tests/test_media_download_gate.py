@@ -146,9 +146,36 @@ def 端到端():
         判定("文本里带图片标签", "图片" in 收到[0].text, repr(收到[0].text[:60]))
 
 
+def 严格模式提示():
+    """gateway.strict 的状态提示:非严格必须喊,严格必须闭嘴。"""
+    print("\n③ 媒体白名单严格模式提示(第二轮评审:别让运维误以为白名单一定在管)")
+    import tempfile
+
+    from hermes_constants import set_hermes_home_override
+
+    根 = Path(tempfile.mkdtemp(prefix="strict_hint_"))
+    for 严格 in (True, False):
+        档案 = 根 / ("strict" if 严格 else "loose")
+        档案.mkdir(parents=True, exist_ok=True)
+        (档案 / "config.yaml").write_text(
+            "gateway:\n"
+            f"  strict: {'true' if 严格 else 'false'}\n"
+            "  media_delivery_allow_dirs:\n"
+            f"    - {根}\n",
+            encoding="utf-8",
+        )
+        set_hermes_home_override(str(档案))
+        提示 = 造适配器()._媒体严格模式提示()
+        if 严格:
+            判定("strict=true → 不提示", 提示 == "", repr(提示)[:60])
+        else:
+            判定("strict=false → 给出醒目提示", "gateway.strict 未开启" in 提示, repr(提示)[:70])
+
+
 def 主体():
     单元()
     端到端()
+    严格模式提示()
     print("\n================ 汇总 ================")
     通过 = sum(1 for _, p in 结果 if p)
     print(f"{通过}/{len(结果)} 通过")

@@ -244,7 +244,34 @@ class NapCat适配器(BasePlatformAdapter):
             打印(f"配置: 关键词触发({len(self.关键词模式列表)}): {模式列表}")
         else:
             打印("配置: 关键词触发=无")
+
+        # 媒体白名单这道闸门的状态要说出来:Hermes 的 validate_media_delivery_path 在
+        # **非严格模式**下几乎全放行(除凭据目录黑名单外都能出站),而本插件的路径校验
+        # 是直接委托给它的 —— 不提示的话运维会以为「白名单」一定在管着。
+        提示 = self._媒体严格模式提示()
+        if 提示:
+            打印(提示)
         return True
+
+    def _媒体严格模式提示(self) -> str:
+        """gateway.strict 未开启时返回一句告警,否则返回空串。
+
+        独立成方法是为了可测:测试不该为了验一句话去真的起 WS 服务。
+        """
+        try:
+            from gateway.media_policy import media_delivery_strict
+
+            if media_delivery_strict():
+                return ""
+        except Exception as e:
+            logger.debug(f"读取媒体严格模式设置失败(不影响启动): {e}")
+            return ""
+        return (
+            "⚠️ 安全提示: gateway.strict 未开启 —— 媒体白名单几乎形同虚设"
+            "(除凭据目录黑名单外,任何本机文件都能经 MEDIA: / 发送路径出去)。"
+            "把机器人放进别人的群时,请设 gateway.strict: true 并配置 "
+            "gateway.media_delivery_allow_dirs。"
+        )
 
     async def disconnect(self):
         """停止服务端并清理资源。"""
