@@ -992,7 +992,7 @@ class NapCat适配器(BasePlatformAdapter):
             if 丢弃说明:
                 logger.warning(f"第{段索引 + 1}段中被安全策略剥掉: {'; '.join(丢弃说明)}")
 
-            回复前缀 = f"[CQ:reply,id={回复目标}]" if (段索引 == 0 and 回复目标) else ""
+            回复前缀 = f"[CQ:reply,id={转义CQ值(回复目标)}]" if (段索引 == 0 and 回复目标) else ""
             CQ文本 = 回复前缀 + 文本转CQ码字符串(净化后)
             if not CQ文本.strip():
                 continue
