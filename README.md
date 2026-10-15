@@ -163,7 +163,7 @@ napcat/
 ├── llm_tools.py       # LLM 工具（napcat_send_message + napcat_call_action）
 ├── security.py        # 出站安全策略（动作白名单 / CQ 码净化 / 出站目标校验）
 ├── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析、CQ 码解析
-└── tests/             # 回归测试（13 个脚本，共 280 条断言）
+└── tests/             # 回归测试（13 个脚本，共 299 条断言）
 ```
 
 ---
@@ -231,9 +231,10 @@ platforms:
     enabled: true
     extra:
       # ── 反向 WS 配置 ──
-      reverse_host: "127.0.0.1"          # 监听地址（默认 127.0.0.1，仅本地）
-      reverse_port: 6700                  # 监听端口（默认 6700）
+      reverse_host: "127.0.0.1"          # 监听地址（默认 127.0.0.1，仅本地）。以 / 开头 = Unix socket 路径
+      reverse_port: 6700                  # 监听端口（默认 6700）；socket 模式下不用
       access_token: ""                    # 访问令牌（可选，用于认证 NapCat 连接）
+      socket_group: ""                    # 仅 socket 模式：把 socket 属组改成该组（如 caddy）
       # reverse_token 可作为 access_token 的别名
 
       # ── HTTP API（推荐开启）──
@@ -414,6 +415,81 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 
 反向 WS 绑**非回环地址**时**必须**同时设置 `access_token`，否则拒绝启动 —— 否则任何能访问该端口的人
 都能伪造 QQ 事件（冒充任意用户/群，直接绕过用户白名单）、伪造 API 响应。
+
+---
+
+## 部署与网络暴露
+
+插件只有反向 WS 一种模式：插件监听，OneBot 实现主动连过来。默认绑 `127.0.0.1:6700`。LLOneBot 跑在另一台机器上时，这段连接要穿过公网，暴露面取决于你把监听放在哪里。
+
+### 监听位置
+
+| `reverse_host` | 谁能连上 | 说明 |
+|---|---|---|
+| `127.0.0.1`（默认） | 本机任何进程 | 不占公网端口。本机用户之间没有隔离，只能靠令牌区分 |
+| `0.0.0.0` 或公网地址 | 任何能访问该端口的人 | 必须同时设 `access_token`，否则插件拒绝启动 |
+| `/dev/shm/napcat.sock` | 只有文件属主与属组 | 不占端口，不经过 TCP 栈。访问控制由内核按文件权限判定 |
+
+### 优先选 Unix socket 的原因
+
+socket 文件把访问控制交给内核，而不是交给一个令牌。插件启动时把权限设成 `0660`（不依赖 umask，否则默认是 `0755`，本机谁都能连），再用 `socket_group` 把属组交给运行反向代理的那个用户。别的用户知道路径也连不上。
+
+它也省掉一个端口：反向代理直接连 socket，插件侧不监听任何 TCP 地址，`ss -ltnp` 里看不到它。
+
+### socket 该放在哪里
+
+`/dev/shm` 是 tmpfs，内容全在内存里。socket 文件本身不落盘，内核也不为它保留磁盘块，所以 `bind` 和 `unlink` 不产生文件系统 I/O。
+
+两个实测出来的约束决定了它不能放别处：
+
+- 不能放 `/tmp` 或 `/var/tmp`。Caddy 的服务单元带 `PrivateTmp=true`，它有独立的临时目录命名空间，看不到你放在 `/tmp` 里的 socket。
+- 不能放家目录。Caddy 以 `caddy` 用户运行；家目录如果是 `0700`（本机 `/home/leemina` 就是），它连路径都走不进去。
+
+说清楚一点：对一个聊天机器人来说，tmpfs 相对磁盘目录省下的那点 I/O 量不出来。选 `/dev/shm` 是因为上面两条把 `/tmp` 和家目录排除了，而它既在内存里，又对所有进程可见。
+
+### Caddy 反代
+
+```caddyfile
+# 放在现有站点块里,末尾的 fallback handle 之前
+@napcat host napcat.example.com
+handle @napcat {
+	@不是设备 not remote_ip 203.0.113.45
+	respond @不是设备 "forbidden" 403
+
+	reverse_proxy unix//dev/shm/napcat.sock
+}
+```
+
+`unix//<路径>` 承载 WebSocket 的 Upgrade，可以直接用。`unix+h2c//<路径>` 不行：实测返回 502，Caddy 日志写的是 `http2: invalid Upgrade request header: ["websocket"]`。那个传输是给 HTTP/2 型后端（gRPC 之类）用的。
+
+反代不会绕过插件侧的鉴权。没带令牌的连接照样被插件拒掉，这一条也实测过。
+
+### 配置
+
+插件侧：
+
+```yaml
+reverse_host: /dev/shm/napcat.sock
+socket_group: caddy
+access_token: ACCESS_TOKEN
+```
+
+运行 Hermes 的用户要先进入 `caddy` 组，否则插件改不了 socket 属组（会打一条告警，Caddy 也连不上）：
+
+```bash
+sudo usermod -aG caddy HERMES_USER
+```
+
+两个占位符：`HERMES_USER` 是运行 Hermes 的账号，`ACCESS_TOKEN` 是两端填同一个的随机串。
+
+客户端侧把反向 WS 地址指向 `wss://napcat.example.com/`，令牌填同一个值。
+
+### 安全边界
+
+- 这条链路的访问控制就是 socket 权限。忘了配 `socket_group` 时，插件打告警，Caddy 连不上。
+- 插件的 WS 服务端不支持 TLS。公网那一段必须由反向代理终止 TLS（Caddy 自动签证书）。不要用明文 `ws://` 穿过公网，也不要把插件端口直接暴露出去。
+- `access_token` 在 socket 模式下不强制，但建议设：它仍然能拦住任何连到反代却没带令牌的人。
+- SELinux 不参与这条链路的判定。本机策略是 enforcing，但 caddy 和 Hermes 都跑在 unconfined 域，类型强制管不到它们。要让 SELinux 覆盖它，得给 caddy 单独写策略。
 
 ---
 

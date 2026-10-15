@@ -372,6 +372,81 @@ any user/group and bypassing the user allowlist) or forge API responses.
 
 ---
 
+## Deployment and network exposure
+
+The plugin runs in reverse WebSocket mode only: it listens, and the OneBot implementation connects to it. The default bind is `127.0.0.1:6700`. When LLOneBot runs on another machine, that connection crosses the public internet, so what you expose depends on where you bind.
+
+### Where the plugin can listen
+
+| `reverse_host` | Who can connect | Notes |
+|---|---|---|
+| `127.0.0.1` (default) | Any process on the host | No public port. Local users are not isolated from each other, so the token is the only gate |
+| `0.0.0.0` or a public address | Anyone who can reach the port | Requires `access_token`. Without it the plugin refuses to start |
+| `/dev/shm/napcat.sock` | Only the file owner and its group | No port, no TCP stack. The kernel enforces the file permissions |
+
+### Why a Unix socket beats loopback TCP
+
+A socket file hands access control to the kernel instead of to a shared secret. The plugin sets the mode to `0660` at startup. Without that, umask would leave `0755` and any local user could connect. Set `socket_group` to move the socket into the group that runs your reverse proxy; a user who knows the path still cannot connect.
+
+It also removes a port from your host. The reverse proxy dials the socket, so the plugin listens on no TCP address at all and does not appear in `ss -ltnp`.
+
+### Socket placement
+
+Put it in `/dev/shm`, a tmpfs whose contents live in memory. The socket file never touches disk and the kernel allocates no disk blocks for it, so `bind` and `unlink` cause no file system I/O.
+
+Two measured constraints rule out the alternatives:
+
+- Not `/tmp` or `/var/tmp`. The Caddy unit sets `PrivateTmp=true`, so Caddy has its own temporary directory namespace and cannot see a socket you place in `/tmp`.
+- Not your home directory. Caddy runs as the `caddy` user, and a home directory with mode `0700` (as on this host: `/home/leemina`) blocks it from even traversing the path.
+
+For a chat bot's message rate, the I/O saved by using tmpfs instead of a directory on disk does not show up in any measurement. `/dev/shm` wins because the two constraints above rule out `/tmp` and your home directory, and tmpfs is both in memory and visible to every process.
+
+### Caddy reverse proxy
+
+```caddyfile
+# Inside your existing site block, before the final fallback handle
+@napcat host napcat.example.com
+handle @napcat {
+	@not_the_device not remote_ip 203.0.113.45
+	respond @not_the_device "forbidden" 403
+
+	reverse_proxy unix//dev/shm/napcat.sock
+}
+```
+
+Use `unix//<path>`. It carries the WebSocket upgrade. Do not use `unix+h2c//<path>`: it returns 502 in testing, and the Caddy log says `http2: invalid Upgrade request header: ["websocket"]`. That transport targets HTTP/2 backends such as gRPC services.
+
+The proxy does not bypass the plugin's own authentication. A connection with no token is still rejected by the plugin. An end-to-end test through Caddy confirmed the token check.
+
+### Configuration
+
+Plugin settings:
+
+```yaml
+reverse_host: /dev/shm/napcat.sock
+socket_group: caddy
+access_token: ACCESS_TOKEN
+```
+
+The user that runs Hermes must belong to the `caddy` group. Otherwise the plugin cannot change the socket group, it logs a warning, and Caddy cannot connect:
+
+```bash
+sudo usermod -aG caddy HERMES_USER
+```
+
+Two placeholders appear here. `HERMES_USER` is the account that runs Hermes, and `ACCESS_TOKEN` is a random string that both sides share.
+
+On the client side, point the reverse WebSocket URL at `wss://napcat.example.com/` and use the same token.
+
+### Limits
+
+- The socket permissions are the access control for this link. If `socket_group` is missing, the plugin warns and Caddy cannot connect.
+- The plugin's WebSocket server does not support TLS. Terminate TLS at the reverse proxy (Caddy provisions certificates for you). Do not send plain `ws://` across the public internet, and do not expose the plugin's port directly.
+- `access_token` is optional in socket mode. Set it anyway: it still stops anyone who reaches the proxy without it.
+- SELinux does not take part in this link. The host policy is enforcing, but caddy and Hermes both run in unconfined domains, so type enforcement never applies to them. Covering caddy would require writing a policy for it.
+
+---
+
 ## 🔗 NapCat Side Configuration
 
 Set up reverse WS connection in NapCat's config:
