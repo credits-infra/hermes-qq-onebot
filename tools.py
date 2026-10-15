@@ -507,8 +507,16 @@ def 解析CQ码(片段: str) -> Optional[tuple]:
         if not 项:
             continue
         键, _, 值 = 项.partition("=")
-        if 键.strip():
-            参数[键.strip()] = 反转义CQ值(值)
+        名 = 键.strip()
+        if not 名:
+            continue
+        if 名 in 参数:
+            # 重复键:各家接收端取第一个还是最后一个没有统一规定,而我们只能校验我们
+            # 看到的那一个 —— 于是 [CQ:image,url=安全,url=/etc/passwd] 或
+            # [CQ:at,qq=all,qq=1] 都能绕过检查(第二轮交叉评审发现)。判不了就不放行:
+            # 返回 None 会让净化按「解析失败」剥掉整条码。
+            return None
+        参数[名] = 反转义CQ值(值)
     return 匹配.group(1).lower(), 参数
 
 

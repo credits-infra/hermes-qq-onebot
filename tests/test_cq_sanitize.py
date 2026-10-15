@@ -146,6 +146,15 @@ def 单元():
     文本, 丢 = security.净化CQ码("[CQ:FILE,file=file:///etc/passwd]")
     判定("[CQ:FILE] 大写也剥掉(小写化后命中永不放过)", 文本.strip() == "" and bool(丢), 丢[:1])
 
+    # 重复键 → fail-closed(第二轮评审:接收端取哪个键没有统一规定,我们只能校验看到的那一个)
+    文本, 丢 = security.净化CQ码(
+        "[CQ:image,file=https://a.example/x.png,url=https://a.example/b.png,url=/etc/passwd]")
+    判定("重复的 url 键 → 整条剥掉", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[CQ:at,qq=all,qq=1]")
+    判定("重复的 qq 键 → 整条剥掉(不能绕过 @全体 检查)", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[CQ:image,file=/etc/passwd,file=https://a.example/x.png]")
+    判定("重复的 file 键 → 整条剥掉", 文本.strip() == "" and bool(丢), 丢[:1])
+
     # 非 file 键里的本地路径也要拦(交叉评审 M4:LLOneBot 取 url || file)
     for 码, 说明 in (("[CQ:image,file=https://a.example/x.png,url=/etc/passwd]", ",url="),
                      ("[CQ:image,file=https://a.example/x.png,src=/etc/passwd]", ",src="),
