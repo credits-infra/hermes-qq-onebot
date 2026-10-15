@@ -81,6 +81,9 @@ class WS:
         self._服务端 = None  # asyncio 服务器对象，由启动() 创建
         # 能力探测:被实现明确拒绝(1404 / "API 不存在")的扩展动作记在这里,之后不再重试。
         self._不支持的动作: set[str] = set()
+        # 握手头里声明的东西:反连的 OneBot 实现会发 X-Self-ID(机器人 QQ 号)。
+        # 认证通过后才写入 —— 未授权的连接不该能影响我们的状态(见 _认证并处理连接)。
+        self._对端SelfID: str = ""
 
     async def 启动(self) -> None:
         """启动反向 WS 服务端（使用 __init__ 中保存的配置）。"""
@@ -154,9 +157,13 @@ class WS:
             except Exception:
                 pass
         self._ws连接实例 = ws连接
+        # 握手头里的机器人 QQ 号:连上来就能知道是谁,不必等第一条事件。
+        # websockets 的 headers 大小写不敏感,写 "X-Self-ID" 即可。
+        self._对端SelfID = str(ws连接.request.headers.get("X-Self-ID", "") or "").strip()
 
         logger.info(f"反向WS客户端已连接：{ws连接.remote_address}")
-        打印(f"反向WS客户端已连接：{ws连接.remote_address}")
+        打印(f"反向WS客户端已连接：{ws连接.remote_address}"
+             + (f" 机器人QQ={self._对端SelfID}" if self._对端SelfID else ""))
 
         try:
             async for 原始消息 in ws连接:
