@@ -134,8 +134,10 @@ hermes gateway restart
 | `set_msg_emoji_like`（表情回应） | ✅ 在其扩展命名空间 | 实现没有时会优雅降级 |
 
 - **令牌**：它连接时发 `Authorization: Bearer <token>`，正是插件读取的格式（无 token 时发空
-  Bearer，插件在不校验模式下也正常）。它另外会发 `X-Self-ID`，插件用事件里的 `self_id`
-  学习机器人 QQ 号。
+  Bearer，插件在不校验模式下也正常）。非 ASCII 令牌也能正确判等。
+- **握手头**：它还会发 `X-Self-ID`（机器人 QQ 号）。插件连接时就读它并打进日志
+  （`反向WS客户端已连接：… 机器人QQ=…`），所以刚接上、还没收到消息时也知道连的是哪个号；
+  机器人 QQ 号仍以事件里的 `self_id` 为准，缺了才用这个兜底。
 - **消息格式**：`messageFormat` 可配 `array`（默认）或 `string`。**两种都能用**——`string`
   时 `message` 是 CQ 码字符串，插件会拆成段数组（见 `tools.规范化消息段`）。
 - **未实现的动作**：返 `retcode 1404` + `"<action> API 不存在"`。插件据此识别并**优雅降级**：
@@ -161,7 +163,7 @@ napcat/
 ├── llm_tools.py       # LLM 工具（napcat_send_message + napcat_call_action）
 ├── security.py        # 出站安全策略（动作白名单 / CQ 码净化 / 出站目标校验）
 ├── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析、CQ 码解析
-└── tests/             # 回归测试（8 个脚本，共 181 条断言）
+└── tests/             # 回归测试（11 个脚本，共 205 条断言）
 ```
 
 ---
@@ -447,6 +449,9 @@ python tests/test_send_robustness.py     # 脏数据不炸 / 长短消息行为�
 python tests/test_inbound_formats.py     # 入站 message 的段数组 / CQ 字符串两种格式
 python tests/test_capability_fallback.py # 扩展动作缺失时的能力探测与优雅降级
 python tests/test_media_download_gate.py # 媒体下载的大小闸门（含无 file_size 的情形）
+python tests/test_self_id_handshake.py   # 握手头 X-Self-ID（含大小写不敏感、未授权不写入）
+python tests/test_bot_qq_learning.py     # 机器人 QQ 号的学习来源与 @ 触发
+python tests/test_auth_edge_cases.py     # 认证边界：非 ASCII 令牌、URL 令牌、无头
 ```
 
 需要一个装了 Hermes 依赖的 python（`websockets`、`gateway` 等）。脚本会自动在

@@ -134,7 +134,10 @@ Verified against LuckyLilliaBot — every action this plugin calls, plus the pro
 | `set_msg_emoji_like` (emoji reaction) | ✅ in its extension namespace | degrades gracefully when missing |
 
 - **Token**: it connects with `Authorization: Bearer <token>` — exactly the header this plugin
-  reads (an empty Bearer when no token is set is also fine).
+  reads (an empty Bearer when no token is set is also fine). Non-ASCII tokens compare correctly.
+- **Handshake header**: it also sends `X-Self-ID` (the bot's QQ number). The plugin reads it at
+  connect time and logs it (`反向WS客户端已连接：… 机器人QQ=…`), so you can tell which account
+  connected before the first event arrives; the event's `self_id` still wins — this is the fallback.
 - **Message format**: `messageFormat` may be `array` (default) or `string`. **Both work** — under
   `string` the `message` field is a CQ-code string, which the plugin splits into segments.
 - **Missing actions**: it answers `retcode 1404` + `"<action> API 不存在"`. The plugin detects that
