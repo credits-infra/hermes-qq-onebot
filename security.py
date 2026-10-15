@@ -223,15 +223,17 @@ def 遍历参数里的路径(参数: Any, 前缀: str = "") -> Iterable[tuple[st
 
 
 def _检查目标参数(动作: str, 参数: dict) -> Optional[str]:
-    """会「动手」的动作,其群 / 用户目标也要在白名单内。
+    """动作的群 / 用户目标必须在白名单内。None=放行,否则返回拒绝说明。
 
-    只读动作(默认白名单里的那些)不查:它只是看,不产生对外影响,而列出一个非
-    白名单群的成员列表本身无害。可一旦运维放行了 send_group_msg 这类**独立发送口**,
-    参数里的 group_id 就是第二条出站通道 —— 不查白名单,模型就能往任意群发东西
-    (交叉评审 M1:实测 {"group_id": 999999, "message": "[CQ:file,...]"} 原样通过)。
+    ⚠️ 这里原先对**只读动作豁免**(动作 in 默认允许的动作 → 直接放行),注释写的理由是
+    「它只是看,不产生对外影响」。这个理由站不住:默认白名单里就含
+    `get_group_msg_history` / `get_friend_msg_history` / `get_msg` /
+    `get_group_member_list` / `get_group_file_system_info` —— 于是任何白名单群里的
+    成员(或提示注入)都能让机器人把**别的群、别人的私聊**的历史读出来再发回本群。
+    「只读」不等于「只读你自己的」,豁免已删除:带目标参数的动作一律校验。
+
+    (洞由 8bddcd5 引入;第二轮交叉评审发现,并指出当时还把这个行为写进了测试当预期。)
     """
-    if 动作 in 默认允许的动作:
-        return None
     for 键, 类型 in (("group_id", "group"), ("group", "group"),
                      ("user_id", "private"), ("user", "private"), ("qq", "private")):
         值 = 参数.get(键)
