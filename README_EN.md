@@ -6,7 +6,7 @@
 
 [![Hermes Plugin](https://img.shields.io/badge/Hermes-Platform%20Plugin-7c3aed?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik0xMiAyTDIuNSA3djEwTDEyIDIybDkuNS0yVjciLz48L3N2Zz4=)](https://hermes-agent.nousresearch.com/docs)
 [![OneBot v11](https://img.shields.io/badge/OneBot-v11-1677ff?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIi8+PC9zdmc+)](https://github.com/botuniverse/onebot)
-[![Version](https://img.shields.io/badge/version-3.3.0-green)](./plugin.yaml)
+[![Version](https://img.shields.io/badge/version-3.4.0-green)](./plugin.yaml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 **Language / 语言：** [中文](README.md) | [English](README_EN.md)
@@ -334,7 +334,10 @@ media allowlist (`gateway.media_delivery_allow_dirs`) for **every parameter that
 (`file`, `url`, `path`, `src`, `dest`, …), not just `file` — LLOneBot sends `url || file`, so
 `file=https://x/a.png,url=/host/file` would smuggle a host path through `url`. `[CQ:at,qq=all]` requires
 `allow_at_all: true`. Unknown CQ types are dropped, and so is **anything that fails to parse** (fail-closed):
-`[CQ:file2,…]` / `[CQ:FILE,…]` used to slip through as "unjudgeable but maybe file-like".
+`[CQ:file2,…]` / `[CQ:FILE,…]` used to slip through as "unjudgeable but maybe file-like". **Duplicate
+parameter keys are dropped too** (receivers disagree on whether the first or last wins, and we can only
+validate the one we see), the CQ prefix is **case-insensitive**, and path validation applies to **any type**
+carrying a path parameter (not just `image`/`record`/`video`).
 
 Sanitization happens at a single **choke point**: every outbound message goes through `_WS发送` / `_HTTP发送`,
 which sanitize inside — instead of each send path having to remember (before this, 5 call sites remembered and
@@ -352,8 +355,16 @@ Attachments sent through the `MEDIA:` route are unaffected — Hermes validates 
 `napcat_send_message` validates that the target is inside the allowlists, and so do **the core send paths**:
 `send()` / `send_image()` / `send_image_file()` / `send_voice()` / `send_document()` all route through
 `_解析投递目标()`, which checks the same allowlists; actions allowed by `napcat_call_action` (e.g.
-`send_group_msg`) also get their `group_id`/`user_id` checked (read-only actions are exempt — they only look).
+`send_group_msg`) also get their `group_id`/`user_id` checked — **including read-only ones**, otherwise any
+member of an allowed group could have the bot read another group's (or someone's private) history back into
+the chat. Message-carrying actions additionally have their `message` / `messages` payload sanitized: a
+disallowed CQ code makes the whole call **refuse with a reason** instead of being silently rewritten.
 Like admission, this is **fail-closed**: with an empty allowlist nothing can be sent either.
+
+Value resolution follows one ladder everywhere — **primary env var → plugin config → alias env var** — so
+narrowing via `NAPCAT_ALLOWED_GROUP_IDS` also narrows the tool-layer path. At startup the plugin reads
+`gateway.strict` and prints a warning when it is off, because the media allowlist is nearly open in
+non-strict mode and the plugin delegates to it.
 
 **Transport** — binding the reverse WebSocket to a non-loopback address **requires** `access_token`;
 otherwise the plugin refuses to start, because anyone reaching that port could forge QQ events (impersonating

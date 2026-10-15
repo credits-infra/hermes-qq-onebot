@@ -6,7 +6,7 @@
 
 [![Hermes Plugin](https://img.shields.io/badge/Hermes-Platform%20Plugin-7c3aed?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik0xMiAyTDIuNSA3djEwTDEyIDIybDkuNS0yVjciLz48L3N2Zz4=)](https://hermes-agent.nousresearch.com/docs)
 [![OneBot v11](https://img.shields.io/badge/OneBot-v11-1677ff?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIi8+PC9zdmc+)](https://github.com/botuniverse/onebot)
-[![Version](https://img.shields.io/badge/version-3.3.0-green)](./plugin.yaml)
+[![Version](https://img.shields.io/badge/version-3.4.0-green)](./plugin.yaml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 **语言 / Language：** [中文](README.md) | [English](README_EN.md)
@@ -163,7 +163,7 @@ napcat/
 ├── llm_tools.py       # LLM 工具（napcat_send_message + napcat_call_action）
 ├── security.py        # 出站安全策略（动作白名单 / CQ 码净化 / 出站目标校验）
 ├── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析、CQ 码解析
-└── tests/             # 回归测试（13 个脚本，共 251 条断言）
+└── tests/             # 回归测试（13 个脚本，共 280 条断言）
 ```
 
 ---
@@ -362,7 +362,12 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
   就能把本机文件塞进 `url`；
 - `[CQ:at,qq=all]`（@全体）默认不放行，要放开设 `allow_at_all: true`；
 - 未知 CQ 类型一律剥掉（默认拒绝）；**解析不出来的 CQ 形状也剥掉**（fail-closed）——
-  `[CQ:file2,...]`、`[CQ:FILE,...]` 这类"净化判不出来、接收端却可能按 `file` 语义处理"的写法原来会被原样放行。
+  `[CQ:file2,...]`、`[CQ:FILE,...]` 这类"净化判不出来、接收端却可能按 `file` 语义处理"的写法原来会被原样放行；
+- **重复参数键直接剥掉**：`[CQ:image,file=https://x/a.png,url=https://安全,url=/本机文件]` 里各家接收端取哪个
+  键没有统一规定，而我们只能校验我们看到的那一个 → 判不了就不放行；
+- **CQ 前缀大小写不敏感**：`[cq:file,...]` 同样会被抓到；
+- 任何类型只要带**承载路径的参数**都查白名单（不再只 `image`/`record`/`video` ——
+  否则 `allowed_cq_types: all` 时 `[CQ:file2,file=/etc/passwd]` 会溜过去）。
 
 净化的位置是**收口**的：所有出站消息都经过 `_WS发送` / `_HTTP发送` 两个薄封装，净化写在里面 ——
 而不是让每条发送路径自己记得调（加固前正是"5 处调了、3 处忘了"，`send_image` 的 URL、
@@ -392,8 +397,15 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 
 **核心发送路径同样校验**：`send()` / `send_image()` / `send_image_file()` / `send_voice()` /
 `send_document()` 全部经过 `_解析投递目标()`，那里统一做一次目标白名单校验；`napcat_call_action`
-放行了的动作（如 `send_group_msg`）其参数里的 `group_id` / `user_id` 也一并校验（只读动作不查 ——
-它只是看，没有对外影响）。
+放行了的动作（如 `send_group_msg`）其参数里的 `group_id` / `user_id` 也一并校验（**读取类动作也不例外** ——
+否则白名单群里的成员就能让机器人把别的群 / 别人的私聊历史读回来）；发消息类动作的 `message` /
+`messages` 载荷同样要过 CQ 净化，命中禁止项就**拒绝整个调用**并把原因回给模型。
+
+> 取值阶梯（与核心发送路径一致）：**主键环境变量 → 插件配置 → 别名环境变量**。
+> 所以用 `NAPCAT_ALLOWED_GROUP_IDS` 收窄时，工具层的那条路也会同步收窄。
+
+> 启动时会读 `gateway.strict`，未开启则打一条醒目提示 —— 非严格模式下的媒体白名单几乎不设防
+> （除凭据目录黑名单外都能出站），而本插件是直接委托给它的。
 
 > 与准入同一姿态：**白名单为空时出站也一律拒绝**（fail-closed）。空名单本来就收不到任何群消息，
 > 谈不上"本来能回"；要放开必须显式写 `all`。
