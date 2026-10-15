@@ -968,16 +968,40 @@ class NapCat适配器(BasePlatformAdapter):
 
         return await self._执行发送(chat_id, 消息类型, 目标ID, CQ文本)
 
+    # ── 出站收口 ──────────────────────────────────────────────────────
+    # 所有出站消息都从这两个方法出去,净化只写在这里 —— 而不是让每个调用点自己
+    # 记得调。加固前正是「5 处记得调、3 处忘了调」:send_image 的 URL 和
+    # send_document 的 caption 因此漏了闸门(交叉评审发现的 H1)。
+    def _净化出站(self, CQ文本: str) -> str:
+        """出站 CQ 文本的唯一净化点。"""
+        净化后, 丢弃说明 = 净化CQ码(CQ文本)
+        if 丢弃说明:
+            logger.warning(f"消息中被安全策略剥掉: {'; '.join(丢弃说明)}")
+        return 净化后
+
+    async def _WS发送(self, 消息类型: str, 目标ID: str, CQ文本: str) -> dict:
+        """经 WebSocket 发出。净化在收口处做一次。"""
+        if not self.ws:
+            return {"status": "failed", "retcode": -1, "message": "客户端未初始化"}
+        文本 = self._净化出站(CQ文本)
+        if 消息类型 == "group":
+            return await self.ws.发送群聊消息(目标ID, 文本)
+        return await self.ws.发送私聊消息(目标ID, 文本)
+
+    async def _HTTP发送(self, 消息类型: str, 目标ID: str, CQ文本: str) -> dict:
+        """经 HTTP API 发出。净化在收口处做一次。调用方须先确认 self._HTTP调用器 非空。"""
+        文本 = self._净化出站(CQ文本)
+        if 消息类型 == "group":
+            return await self._HTTP调用器.发送群聊消息(目标ID, 文本)
+        return await self._HTTP调用器.发送私聊消息(目标ID, 文本)
+
     async def _执行发送(
         self, chat_id: str, 消息类型: str, 目标ID: str, 消息内容: str
     ) -> SendResult:
         """执行 WS 发送并处理结果。"""
         logger.info(f"→ {消息类型}:{目标ID}")
         try:
-            if 消息类型 == "group":
-                结果 = await self.ws.发送群聊消息(目标ID, 消息内容)
-            else:
-                结果 = await self.ws.发送私聊消息(目标ID, 消息内容)
+            结果 = await self._WS发送(消息类型, 目标ID, 消息内容)
 
             if 结果.get("status") == "failed" or 结果.get("retcode", 0) != 0:
                 错误 = (
@@ -1056,10 +1080,7 @@ class NapCat适配器(BasePlatformAdapter):
         # 优先 HTTP API
         if self._HTTP调用器:
             try:
-                if 消息类型 == "group":
-                    结果 = await self._HTTP调用器.发送群聊消息(目标ID, CQ文本)
-                else:
-                    结果 = await self._HTTP调用器.发送私聊消息(目标ID, CQ文本)
+                结果 = await self._HTTP发送(消息类型, 目标ID, CQ文本)
                 返回码 = 结果.get("retcode", -1)
                 if 返回码 in (0, 200):
                     if 返回码 == 200:
@@ -1075,10 +1096,7 @@ class NapCat适配器(BasePlatformAdapter):
             return SendResult(success=False, error="客户端未初始化")
 
         try:
-            if 消息类型 == "group":
-                结果 = await self.ws.发送群聊消息(目标ID, CQ文本)
-            else:
-                结果 = await self.ws.发送私聊消息(目标ID, CQ文本)
+            结果 = await self._WS发送(消息类型, 目标ID, CQ文本)
 
             if 结果.get("status") == "failed" or 结果.get("retcode", 0) != 0:
                 错误 = (
@@ -1131,10 +1149,7 @@ class NapCat适配器(BasePlatformAdapter):
             return SendResult(success=False, error=目标ID)
 
         try:
-            if 消息类型 == "group":
-                结果 = await self.ws.发送群聊消息(目标ID, CQ文本)
-            else:
-                结果 = await self.ws.发送私聊消息(目标ID, CQ文本)
+            结果 = await self._WS发送(消息类型, 目标ID, CQ文本)
 
             if 结果.get("status") == "failed" or 结果.get("retcode", 0) != 0:
                 错误 = 结果.get("wording") or 结果.get("message") or 结果.get("msg") or "未知错误"
@@ -1160,10 +1175,7 @@ class NapCat适配器(BasePlatformAdapter):
         # caption 先单独发送
         if caption and caption.strip():
             try:
-                if 消息类型 == "group":
-                    await self.ws.发送群聊消息(目标ID, caption)
-                else:
-                    await self.ws.发送私聊消息(目标ID, caption)
+                await self._WS发送(消息类型, 目标ID, caption)
             except Exception as e:
                 logger.warning(f"文件caption发送失败: {e}")
 
