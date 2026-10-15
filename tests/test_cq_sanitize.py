@@ -130,6 +130,12 @@ def 单元():
     判定("allowed_cq_types=all 放行未知类型", "[CQ:unknown_type" in 文本)
     文本, 丢 = security.净化CQ码("[CQ:file,file=file:///etc/passwd]")
     判定("但 all 仍拦 [CQ:file](永不放过)", 文本.strip() == "", 丢[:1])
+    文本, 丢 = security.净化CQ码("[CQ:file2,file=/etc/passwd]")
+    判定("all 下未知类型带路径参数也要查白名单", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[CQ:weird_type,url=/etc/passwd]")
+    判定("all 下任何类型带路径参数都查白名单", 文本.strip() == "" and bool(丢), 丢[:1])
+    文本, 丢 = security.净化CQ码("[CQ:face,id=178]")
+    判定("all 下正常 face 照常放行", "[CQ:face" in 文本 and not 丢)
     设插件配置({})
 
     # 解析失败的形状 → fail-closed(交叉评审 M3:原来原样放行)

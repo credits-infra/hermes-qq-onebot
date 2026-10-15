@@ -438,21 +438,21 @@ def 净化CQ码(文本: str) -> tuple[str, list[str]]:
             丢弃.append("[CQ:at,qq=all] 是 @全体成员,默认不放行(要放开设 allow_at_all: true)")
             return ""
 
-        if 类型 in 需校验路径的CQ类型:
-            # 所有可能承载路径的键都得查,不能只看 file:LLOneBot 发送取
-            # `url || file`(outgoing.ts:330),于是
-            # `[CQ:image,file=https://x/a.png,url=/本机文件]` 里真正会被上传的是
-            # url —— 旧代码只看了 file(一个远程 URL,白名单直接放过)就放行
-            # (交叉评审 M4)。判不了来路的,宁可剥掉。
-            承载 = [(键, 值) for 键, 值 in 参数.items() if 键 in 路径参数键]
-            if not 承载:
-                丢弃.append(f"[CQ:{类型}] 没有承载路径的参数,判不出来路")
-                return ""
+        # 路径校验与类型解耦:只要这条码带着承载路径的参数(**任何类型**),就查白名单。
+        # 原来这一步挂在 `类型 in 需校验路径的CQ类型` 上,于是 allowed_cq_types: all
+        # 时 [CQ:file2,file=/etc/passwd] 一路放行 —— 而 M3 的整个前提正是「接收端可能
+        # 把 file2 按 file 语义处理」(第二轮交叉评审发现)。
+        承载 = [(键, 值) for 键, 值 in 参数.items() if 键 in 路径参数键]
+        if 承载:
             for 键, 值 in 承载:
                 错误 = 校验本地路径(值)
                 if 错误:
                     丢弃.append(f"[CQ:{类型}] 参数「{键}」{错误}")
                     return ""
+        elif 类型 in 需校验路径的CQ类型:
+            # 这几种类型的语义就是「把一个文件拿出来」,却没有承载路径的参数 —— 来路不明,不放行
+            丢弃.append(f"[CQ:{类型}] 没有承载路径的参数,判不出来路")
+            return ""
 
         return 匹配.group()
 
