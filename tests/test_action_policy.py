@@ -96,15 +96,19 @@ def 主体():
     判定("all 也拦 get_cookies(永不放过)", security.检查动作("get_cookies") is not None)
     判定("all 也拦 get_csrf_token(永不放过)", security.检查动作("get_csrf_token") is not None)
 
-    print("\n④ 环境变量也能配(配置 > 环境变量)")
+    print("\n④ 环境变量与配置走同一条阶梯(主键环境变量 > 配置)")
     os.environ["NAPCAT_ALLOWED_ACTIONS"] = "send_msg"
     清配置()
-    判定("环境变量生效(无配置时)", security.检查动作("send_msg") is None)
+    判定("只有环境变量时生效", security.检查动作("send_msg") is None)
     设配置({"allowed_actions": "get_status"})
-    判定("配置存在时压过环境变量(环境变量里的 send_msg 失效)",
-         security.检查动作("send_msg") is not None)
-    判定("被配置点名的 get_status 生效", security.检查动作("get_status") is None)
+    判定("两者都在 → 环境变量优先(与 main.获取配置 同一套语义,收窄/放宽都算数)",
+        security.检查动作("send_msg") is None)
+    判定("被配置点名的 get_status 也在(点名是追加,不是替换)",
+        security.检查动作("get_status") is None)
     del os.environ["NAPCAT_ALLOWED_ACTIONS"]
+    判定("去掉环境变量后配置仍生效", security.检查动作("get_status") is None)
+    判定("此时未点名的 send_msg 回到默认拒绝", security.检查动作("send_msg") is not None)
+    清配置()
 
     print("\n⑤ 路径校验:复用 Hermes 媒体白名单(严格模式)")
     临时 = tempfile.mkdtemp(prefix="napcat_policy_")

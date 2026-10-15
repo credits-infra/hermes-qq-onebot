@@ -120,12 +120,30 @@ def 当前额外配置() -> dict:
     return 额外 if isinstance(额外, dict) else {}
 
 
+def _策略原始值(配置键: str, 别名环境变量: str = "") -> Any:
+    """安全的统一取值阶梯:主键环境变量 → 插件配置 → 别名环境变量 → None。
+
+    为什么必须统一:核心发送路径(main.获取配置)是「环境变量优先、配置兜底」,
+    而本模块原来是「配置优先、且只认别名环境变量」。于是运维用
+    NAPCAT_ALLOWED_GROUP_IDS 收窄群白名单时,走工具层的那条路(检查发信目标 /
+    动作目标校验)看不见这次收窄 —— 收窄形同没做(第二轮交叉评审发现)。
+    """
+    主 = os.getenv("NAPCAT_" + 配置键.upper())
+    if 主 is not None and str(主).strip() != "":
+        return 主
+    值 = 当前额外配置().get(配置键)
+    if 值 is not None and not (isinstance(值, str) and not 值.strip()):
+        return 值
+    if 别名环境变量:
+        别名 = os.getenv(别名环境变量)
+        if 别名 is not None and str(别名).strip() != "":
+            return 别名
+    return None
+
+
 def 当前动作策略() -> tuple[frozenset, bool]:
-    """按「配置 > 环境变量 > 默认」取生效的动作策略。"""
-    原始 = 当前额外配置().get("allowed_actions")
-    if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
-        原始 = os.getenv("NAPCAT_ALLOWED_ACTIONS")
-    return 解析动作策略(原始)
+    """按统一阶梯取生效的动作策略(见 `_策略原始值`)。"""
+    return 解析动作策略(_策略原始值("allowed_actions"))
 
 
 def 检查动作(动作: str) -> Optional[str]:
@@ -317,10 +335,7 @@ def 检查调用(动作: str, 参数: Any) -> Optional[str]:
 def _名单(键: str, 环境变量: str) -> frozenset[str]:
     from .tools import 解析号码名单
 
-    原始 = 当前额外配置().get(键)
-    if 原始 is None or 原始 == "":
-        原始 = os.getenv(环境变量, "")
-    return 解析号码名单(原始)
+    return 解析号码名单(_策略原始值(键, 环境变量))
 
 
 def 检查发信目标(目标类型: str, 目标ID: str) -> Optional[str]:
@@ -385,18 +400,12 @@ def 解析CQ类型策略(原始: Any) -> tuple[frozenset, bool]:
 
 
 def 当前CQ类型策略() -> tuple[frozenset, bool]:
-    原始 = 当前额外配置().get("allowed_cq_types")
-    if 原始 is None or (isinstance(原始, str) and not 原始.strip()):
-        原始 = os.getenv("NAPCAT_ALLOWED_CQ_TYPES")
-    return 解析CQ类型策略(原始)
+    return 解析CQ类型策略(_策略原始值("allowed_cq_types"))
 
 
 def 允许艾特全体() -> bool:
     """`[CQ:at,qq=all]`(群里 @全体成员)默认不放行。"""
-    原始 = 当前额外配置().get("allow_at_all")
-    if 原始 is None:
-        原始 = os.getenv("NAPCAT_ALLOW_AT_ALL", "")
-    return str(原始).strip().lower() in ("1", "true", "yes", "on")
+    return str(_策略原始值("allow_at_all") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def 净化CQ码(文本: str) -> tuple[str, list[str]]:

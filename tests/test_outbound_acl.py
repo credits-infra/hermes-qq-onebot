@@ -167,6 +167,25 @@ def 动作目标():
     判定("非发消息动作的其它字符串参数不受这条限制(它本来也没有 message 参数)", 错误 is None, str(错误))
     设插件配置({})
 
+    print("\n⑩ 环境变量与配置走同一条阶梯(第二轮评审:收窄失效)")
+    import os
+    设插件配置({"allowed_group_ids": ["222"]})
+    os.environ["NAPCAT_ALLOWED_GROUP_IDS"] = "111"
+    try:
+        错误 = security.检查发信目标("group", "222")
+        判定("主键环境变量优先 → 配置里的 222 被 env 收窄掉", bool(错误), str(错误)[:44])
+        错误 = security.检查发信目标("group", "111")
+        判定("env 里放的 111 生效", 错误 is None, str(错误))
+        os.environ.pop("NAPCAT_ALLOWED_GROUP_IDS")
+        设插件配置({})
+        os.environ["NAPCAT_ALLOWED_GROUPS"] = "333"
+        错误 = security.检查发信目标("group", "333")
+        判定("别名环境变量在主键未配时兜底生效", 错误 is None, str(错误))
+    finally:
+        os.environ.pop("NAPCAT_ALLOWED_GROUP_IDS", None)
+        os.environ.pop("NAPCAT_ALLOWED_GROUPS", None)
+        设插件配置({})
+
 
 def 主体():
     临时 = Path(tempfile.mkdtemp(prefix="napcat_acl_"))
