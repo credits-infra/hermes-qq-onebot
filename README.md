@@ -6,7 +6,7 @@
 
 [![Hermes Plugin](https://img.shields.io/badge/Hermes-Platform%20Plugin-7c3aed?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik0xMiAyTDIuNSA3djEwTDEyIDIybDkuNS0yVjciLz48L3N2Zz4=)](https://hermes-agent.nousresearch.com/docs)
 [![OneBot v11](https://img.shields.io/badge/OneBot-v11-1677ff?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIi8+PC9zdmc+)](https://github.com/botuniverse/onebot)
-[![Version](https://img.shields.io/badge/version-3.1.0-green)](./plugin.yaml)
+[![Version](https://img.shields.io/badge/version-3.3.0-green)](./plugin.yaml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 **语言 / Language：** [中文](README.md) | [English](README_EN.md)
@@ -163,7 +163,7 @@ napcat/
 ├── llm_tools.py       # LLM 工具（napcat_send_message + napcat_call_action）
 ├── security.py        # 出站安全策略（动作白名单 / CQ 码净化 / 出站目标校验）
 ├── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析、CQ 码解析
-└── tests/             # 回归测试（11 个脚本，共 205 条断言）
+└── tests/             # 回归测试（13 个脚本，共 251 条断言）
 ```
 
 ---
@@ -338,7 +338,7 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 ## 🛡️ 出站安全策略
 
 这个插件能让 LLM 直接调 OneBot API，也能在回复里写 CQ 码 —— 两条路都能把**服务器上的文件发出去**。
-把它放进自己的小号群无所谓，放进别人的群就必须有闸门。以下是内置的三道（默认全开，不需要额外配置）：
+把它放进自己的小号群无所谓，放进别人的群就必须有闸门。以下是内置的四道（默认全开，不需要额外配置）：
 
 ### 1. API 动作白名单（`napcat_call_action`）
 
@@ -355,13 +355,23 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 `[CQ:file,file=file:///任意路径]` 与 `upload_group_file` 是同一条外泄路，所以：
 
 - `[CQ:file]` 永不放过；
-- `[CQ:image]` / `[CQ:record]` / `[CQ:video]` 的 `file` 参数若是**本机路径**，必须过 Hermes 的媒体白名单
-  （`gateway.media_delivery_allow_dirs`）—— 复用 Hermes 自己的策略，不另造一套，"哪些文件能出去"只有一个事实来源；
+- `[CQ:image]` / `[CQ:record]` / `[CQ:video]` 里**任何承载路径的参数**（`file` / `url` / `path` /
+  `src` / `dest` …）只要指向**本机路径**，就必须过 Hermes 的媒体白名单
+  （`gateway.media_delivery_allow_dirs`）—— 复用 Hermes 自己的策略，不另造一套，"哪些文件能出去"只有一个事实来源。
+  之所以不能只看 `file`：LLOneBot 发送时取 `url || file`，一个 `file=https://x/a.png,url=/本机文件`
+  就能把本机文件塞进 `url`；
 - `[CQ:at,qq=all]`（@全体）默认不放行，要放开设 `allow_at_all: true`；
-- 未知 CQ 类型一律剥掉（默认拒绝）。
+- 未知 CQ 类型一律剥掉（默认拒绝）；**解析不出来的 CQ 形状也剥掉**（fail-closed）——
+  `[CQ:file2,...]`、`[CQ:FILE,...]` 这类"净化判不出来、接收端却可能按 `file` 语义处理"的写法原来会被原样放行。
 
-净化的位置覆盖所有由**模型**产生文本的出口：普通消息、` ```CQ ` 代码块、长消息拆分、图片 caption。
+净化的位置是**收口**的：所有出站消息都经过 `_WS发送` / `_HTTP发送` 两个薄封装，净化写在里面 ——
+而不是让每条发送路径自己记得调（加固前正是"5 处调了、3 处忘了"，`send_image` 的 URL、
+`send_image_file` 的路径、`send_document` 的 caption 都漏了闸门）。
 被剥掉的码会打警告日志，不会变成字面量发出去。
+
+另外，**拼进 CQ 参数的动态值会先做 CQ 转义**（图片 URL、本机路径、reply id）：
+值里的逗号会让接收端多解析出一个参数键，值里的方括号会凭空长出一个新 CQ 码 ——
+这两种都不含 `[CQ:` 子串，净化看不见，只能靠转义挡住（`&#44;` / `&#91;` / `&#93;`，接收端会还原）。
 
 > 走 `MEDIA:` 通道的附件不受影响：那条路由 Hermes 先过媒体白名单，再由 adapter 的
 > `send_image_file` / `send_document` 发出。
@@ -379,6 +389,14 @@ NAPCAT_ALLOW_AT_ALL=false                         # 是否允许 @全体成员
 
 另外 `napcat_send_message` 指定目标时也会校验目标在白名单内，否则被允许的人（或提示注入）
 可以指挥机器人把消息发到白名单之外的任意群 / 任意 QQ 用户。
+
+**核心发送路径同样校验**：`send()` / `send_image()` / `send_image_file()` / `send_voice()` /
+`send_document()` 全部经过 `_解析投递目标()`，那里统一做一次目标白名单校验；`napcat_call_action`
+放行了的动作（如 `send_group_msg`）其参数里的 `group_id` / `user_id` 也一并校验（只读动作不查 ——
+它只是看，没有对外影响）。
+
+> 与准入同一姿态：**白名单为空时出站也一律拒绝**（fail-closed）。空名单本来就收不到任何群消息，
+> 谈不上"本来能回"；要放开必须显式写 `all`。
 
 ### 传输层
 

@@ -6,7 +6,7 @@
 
 [![Hermes Plugin](https://img.shields.io/badge/Hermes-Platform%20Plugin-7c3aed?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxwYXRoIGQ9Ik0xMiAyTDIuNSA3djEwTDEyIDIybDkuNS0yVjciLz48L3N2Zz4=)](https://hermes-agent.nousresearch.com/docs)
 [![OneBot v11](https://img.shields.io/badge/OneBot-v11-1677ff?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIi8+PC9zdmc+)](https://github.com/botuniverse/onebot)
-[![Version](https://img.shields.io/badge/version-3.0.0-green)](./plugin.yaml)
+[![Version](https://img.shields.io/badge/version-3.3.0-green)](./plugin.yaml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
 **Language / 语言：** [中文](README.md) | [English](README_EN.md)
@@ -318,7 +318,7 @@ NAPCAT_ALLOW_AT_ALL=false                         # allow @everyone
 ## 🛡️ Outbound Security Policy
 
 This plugin lets the LLM call OneBot APIs and write CQ codes in replies — **both can exfiltrate files from
-the host**. That is fine for a bot in your own group, not fine for a bot in someone else's. Three gates ship
+the host**. That is fine for a bot in your own group, not fine for a bot in someone else's. Four gates ship
 on by default:
 
 **1. API action allowlist (`napcat_call_action`)** — only read-only queries are allowed by default
@@ -329,17 +329,31 @@ arbitrary path), `delete_msg`, `set_group_*` and `send_*` are refused unless the
 under `all`. Naming actions **extends** the default read-only set — enabling one action never locks out queries.
 
 **2. CQ code sanitization** — `[CQ:file,file=file:///any/path]` is the same exfiltration route as
-`upload_group_file`, so it is never allowed; `[CQ:image]`/`[CQ:record]`/`[CQ:video]` with a **local** path must
-pass Hermes' own media allowlist (`gateway.media_delivery_allow_dirs`) so that "which files may leave" has a
-single source of truth; `[CQ:at,qq=all]` requires `allow_at_all: true`; unknown CQ types are dropped
-(default-deny). Sanitization covers every egress of **model-generated** text: normal messages, ```` ```CQ ````
-blocks, long-message splitting and image captions. Attachments sent through the `MEDIA:` route are unaffected —
-Hermes validates those first.
+`upload_group_file`, so it is never allowed; `[CQ:image]`/`[CQ:record]`/`[CQ:video]` must pass Hermes' own
+media allowlist (`gateway.media_delivery_allow_dirs`) for **every parameter that can carry a path**
+(`file`, `url`, `path`, `src`, `dest`, …), not just `file` — LLOneBot sends `url || file`, so
+`file=https://x/a.png,url=/host/file` would smuggle a host path through `url`. `[CQ:at,qq=all]` requires
+`allow_at_all: true`. Unknown CQ types are dropped, and so is **anything that fails to parse** (fail-closed):
+`[CQ:file2,…]` / `[CQ:FILE,…]` used to slip through as "unjudgeable but maybe file-like".
+
+Sanitization happens at a single **choke point**: every outbound message goes through `_WS发送` / `_HTTP发送`,
+which sanitize inside — instead of each send path having to remember (before this, 5 call sites remembered and
+3 forgot: `send_image`'s URL, `send_image_file`'s path, `send_document`'s caption). Dropped codes are logged as
+warnings, never sent as literals.
+
+Dynamic values interpolated into a CQ parameter (image URL, local path, reply id) are **CQ-escaped** first: a
+comma inside a value would otherwise become an extra parameter key, and brackets would grow a brand-new CQ code —
+neither contains `[CQ:`, so the sanitizer cannot see them (`&#44;` / `&#91;` / `&#93;`, unescaped by receivers).
+Attachments sent through the `MEDIA:` route are unaffected — Hermes validates those first.
 
 **3. Admission control (default deny)** — `allowed_qq_ids` (empty = nobody) and `allowed_group_ids`
 (empty = no group, a **behavior change**: configure it or the bot ignores all group messages).
 `group_command_requires_mention` (default `true`) also requires an @mention for `/commands` in groups.
-`napcat_send_message` additionally validates that the target is inside the allowlists.
+`napcat_send_message` validates that the target is inside the allowlists, and so do **the core send paths**:
+`send()` / `send_image()` / `send_image_file()` / `send_voice()` / `send_document()` all route through
+`_解析投递目标()`, which checks the same allowlists; actions allowed by `napcat_call_action` (e.g.
+`send_group_msg`) also get their `group_id`/`user_id` checked (read-only actions are exempt — they only look).
+Like admission, this is **fail-closed**: with an empty allowlist nothing can be sent either.
 
 **Transport** — binding the reverse WebSocket to a non-loopback address **requires** `access_token`;
 otherwise the plugin refuses to start, because anyone reaching that port could forge QQ events (impersonating
