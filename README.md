@@ -116,9 +116,36 @@ hermes gateway restart
 | [NapCat](https://github.com/NapNeko/NapCatQQ) | ✅ 首选 | 推荐使用，功能最全面 |
 | [Lagrange.OneBot](https://github.com/LagrangeDev/Lagrange.Core) | ✅ 兼容 | 正常工作 |
 | [go-cqhttp](https://github.com/Mrs4s/go-cqhttp) | ⚠️ 旧版 | 可用但已停止维护 |
-| [LLOneBot](https://github.com/LLOneBot/LLOneBot) | ✅ 兼容 | 正常工作 |
+| [LuckyLilliaBot](https://github.com/LLOneBot/LuckyLilliaBot)（原 LLOneBot） | ✅ 兼容 | 已改名并迁到新仓库；逐项核对过，见下 |
 
 > 只要符合 OneBot v11 标准的实现都能用～
+
+### 实测细节（2026-10，对着实现源码逐项核对）
+
+以 LuckyLilliaBot 为基准，核对了本插件用到的每个动作与协议细节：
+
+| 本插件的调用 | 实现情况 | 备注 |
+|:---|:---:|:---|
+| `send_group_msg` / `send_private_msg` | ✅ | |
+| `get_group_info` / `get_msg` / `get_file` | ✅ | |
+| `upload_group_file` / `upload_private_file` | ✅ | |
+| `send_group_forward_msg` / `send_private_forward_msg` | ✅ | 合并转发 |
+| `send_poke`（标准）/ `friend_poke`（其扩展） | ✅ 都有 | 插件**先试标准的**，被拒才退专有的 |
+| `set_msg_emoji_like`（表情回应） | ✅ 在其扩展命名空间 | 实现没有时会优雅降级 |
+
+- **令牌**：它连接时发 `Authorization: Bearer <token>`，正是插件读取的格式（无 token 时发空
+  Bearer，插件在不校验模式下也正常）。它另外会发 `X-Self-ID`，插件用事件里的 `self_id`
+  学习机器人 QQ 号。
+- **消息格式**：`messageFormat` 可配 `array`（默认）或 `string`。**两种都能用**——`string`
+  时 `message` 是 CQ 码字符串，插件会拆成段数组（见 `tools.规范化消息段`）。
+- **未实现的动作**：返 `retcode 1404` + `"<action> API 不存在"`。插件据此识别并**优雅降级**：
+  首次提示一次、之后停用该功能，不会每条消息刷一行日志。换实现时不必担心扩展动作缺失。
+- **媒体段**：`transform/message/incoming.ts` 会给 image/video/file/record 段带 `file_size`，
+  下载闸门能预判；即使某个实现不带，插件也按配置上限尝试下载（下载本身有 HEAD 预检 +
+  边下边查两道闸门）。
+
+> NapCat / Lagrange.OneBot / go-cqhttp 未逐个核对源码，但插件的策略是「标准动作优先、
+> 不支持就降级」，不依赖某一家的实现细节。
 
 ---
 
@@ -132,7 +159,9 @@ napcat/
 ├── ws.py              # 反向 WS 服务端（WS 类）
 ├── napcat_http.py     # HTTP API 调用器（NapcatHttp 类）
 ├── llm_tools.py       # LLM 工具（napcat_send_message + napcat_call_action）
-└── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析
+├── security.py        # 出站安全策略（动作白名单 / CQ 码净化 / 出站目标校验）
+├── tools.py           # 常量、LRU缓存、媒体下载、消息段构建/解析、CQ 码解析
+└── tests/             # 回归测试（8 个脚本，共 181 条断言）
 ```
 
 ---
@@ -415,6 +444,9 @@ python tests/test_action_policy.py       # API 动作白名单 + 路径校验
 python tests/test_cq_sanitize.py         # CQ 码净化（端到端打真 send()）
 python tests/test_access_control.py      # 群/用户白名单、群指令触发、出站目标
 python tests/test_send_robustness.py     # 脏数据不炸 / 长短消息行为一致
+python tests/test_inbound_formats.py     # 入站 message 的段数组 / CQ 字符串两种格式
+python tests/test_capability_fallback.py # 扩展动作缺失时的能力探测与优雅降级
+python tests/test_media_download_gate.py # 媒体下载的大小闸门（含无 file_size 的情形）
 ```
 
 需要一个装了 Hermes 依赖的 python（`websockets`、`gateway` 等）。脚本会自动在

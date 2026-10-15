@@ -116,9 +116,32 @@ hermes gateway restart
 | [NapCat](https://github.com/NapNeko/NapCatQQ) | ✅ Recommended | Best feature support |
 | [Lagrange.OneBot](https://github.com/LagrangeDev/Lagrange.Core) | ✅ Compatible | Works fine |
 | [go-cqhttp](https://github.com/Mrs4s/go-cqhttp) | ⚠️ Legacy | Usable but no longer maintained |
-| [LLOneBot](https://github.com/LLOneBot/LLOneBot) | ✅ Compatible | Works fine |
+| [LuckyLilliaBot](https://github.com/LLOneBot/LuckyLilliaBot) (formerly LLOneBot) | ✅ Compatible | Renamed, new repo; verified action-by-action (below) |
 
 > Any implementation conforming to the OneBot v11 standard works!
+
+### Verification details (2026-10, checked against the implementation's source)
+
+Verified against LuckyLilliaBot — every action this plugin calls, plus the protocol details:
+
+| Called by this plugin | Supported | Notes |
+|:---|:---:|:---|
+| `send_group_msg` / `send_private_msg` | ✅ | |
+| `get_group_info` / `get_msg` / `get_file` | ✅ | |
+| `upload_group_file` / `upload_private_file` | ✅ | |
+| `send_group_forward_msg` / `send_private_forward_msg` | ✅ | merged forwarding |
+| `send_poke` (standard) / `friend_poke` (its extension) | ✅ both | the plugin tries the **standard one first** |
+| `set_msg_emoji_like` (emoji reaction) | ✅ in its extension namespace | degrades gracefully when missing |
+
+- **Token**: it connects with `Authorization: Bearer <token>` — exactly the header this plugin
+  reads (an empty Bearer when no token is set is also fine).
+- **Message format**: `messageFormat` may be `array` (default) or `string`. **Both work** — under
+  `string` the `message` field is a CQ-code string, which the plugin splits into segments.
+- **Missing actions**: it answers `retcode 1404` + `"<action> API 不存在"`. The plugin detects that
+  and **degrades gracefully** (announced once, then the feature is disabled — no per-message log spam).
+- **Media segments**: `transform/message/incoming.ts` includes `file_size` for image/video/file/record,
+  so the download gate can pre-check; if an implementation omits it, the plugin still attempts the
+  download under the configured limit (the download itself enforces HEAD pre-check + streaming abort).
 
 ---
 
