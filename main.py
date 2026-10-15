@@ -266,8 +266,10 @@ class NapCat适配器(BasePlatformAdapter):
         """WS 事件分发入口。"""
         事件类型 = 原始数据.get("post_type", "")
 
-        # 自动学习机器人 QQ 号
-        机器人QQ = str(原始数据.get("self_id", ""))
+        # 自动学习机器人 QQ 号:事件里的 self_id 优先;实现没给时用握手里声明的
+        # (X-Self-ID,见 ws._对端SelfID)。这样即使某个事件缺 self_id,群里的 @ 触发
+        # 也认得出「@的是不是自己」。
+        机器人QQ = str(原始数据.get("self_id", "")) or self.ws._对端SelfID
         if 机器人QQ:
             self.机器人QQ号 = 机器人QQ
 
